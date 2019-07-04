@@ -11,7 +11,7 @@
 #define OLED_RESET -1  // Not used
 Adafruit_SSD1306 display(OLED_RESET);
 
-#define pot PA5
+#define pot PA2
 #define button PB12
 #define motorL PA0
 #define motorR PB0
@@ -23,20 +23,19 @@ Adafruit_SSD1306 display(OLED_RESET);
 int potVal, oldPot, correction;
 int PWMleft = 300;
 int PWMright = 300;
-float Kp = 50;
-float Kd = 100;
+float Kp = 40;
+float Kd = 120;
 int lastSwitch = millis();
 int tPrev, tCurrent;
-float thresh = 2;
 bool tuneKp = false;
 bool tuneKd = false;
-bool tuneThresh = false;
+bool freeSpins = false;
 bool left = false;
 bool right = false;
 
 
 int error, lastError, deltaError = 0;
-int inc = 0.25;
+float inc = 1;
 
 void change_mode(void);
 int calcDerivative(void);
@@ -52,12 +51,9 @@ void setup() {
   display.clearDisplay();
   display.setTextSize(1);
   display.setTextColor(WHITE);
-  display.setCursor(0,0);
-  display.println("OLED Display 128x64");
   display.setFont(&FreeMono12pt7b);
-  display.drawPixel(0,45,WHITE);
-  display.setCursor(4,45);
-  display.println("Welcome!");
+  display.setCursor(6,30);
+  display.println("Jarvis Booting Up...");
   display.display();
 
   pinMode(button, INPUT_PULLUP);
@@ -73,7 +69,7 @@ void loop() {
   oldPot = potVal;
 
   if (tuneKp) {
-    // Tune Kp mode (first in cycle of modes, turn off motors)
+    // Tune Kp mode (Turn off motors)
     pwm_stop(PA_0);
     pwm_stop(PB_0);
 
@@ -90,7 +86,10 @@ void loop() {
     display.display();
 
   } else if (tuneKd) {
-    // Tune Kd mode
+    // Tune Kd mode (Turn motors off)
+    pwm_stop(PA_0);
+    pwm_stop(PB_0);
+
     potVal = analogRead(pot);
     if (potVal > oldPot) {
       Kd += inc;
@@ -103,11 +102,15 @@ void loop() {
     display.print(Kd);
     display.display();
 
-  } else if (tuneThresh) {
+  } else if (freeSpins) {
+    // Free potentiometer spins (Turn motors off)
+    pwm_stop(PA_0);
+    pwm_stop(PB_0);
+
     display.clearDisplay();
+    display.setCursor(4,40);
+    display.print("FREE SPINS");
     display.display();
-    Serial.print("FREE SPINS");
-    delay(1000);
 
   } else {
     // Main PID sequence
@@ -232,25 +235,35 @@ int calcDerivative(void) {
     derivative = 1000.0*deltaError/tPrev; // tCurrent is 0 at the moment of a state change
     lastError = error;
   }
-  Serial.println(derivative);
+  // Serial.println(derivative);
   return derivative;
 }
 
 //shift mode by button press
 //tuneKp mode changes Kp with potentiometer
 //tuneKd mode changes Kd with potentiometer
-//tuneThresh mode changes QRD threshold with potentiometer
+//freeSpins mode changes QRD threshold with potentiometer
 //default mode (both false) tries to follow tape
 void change_mode(void) {
-  if (!tuneKp && !tuneKd && !tuneThresh) {
+  Serial.println("YO");
+
+  // move to next mode
+  if (!tuneKp && !tuneKd && !freeSpins) {
     tuneKp = true;
+    tuneKd = false;
+    freeSpins = false;
   } else if (tuneKp) {
-      tuneKp = false;
-      tuneKd = true;
+    tuneKp = false;
+    tuneKd = true;
+    freeSpins = false;
   } else if (tuneKd) {
-      tuneKd = false;
-      tuneThresh = true;
-  } else if (tuneThresh) {
-      tuneThresh = false;
+    tuneKd = false;
+    tuneKp = false;
+    freeSpins = true;
+  } else if (freeSpins) {
+    tuneKp = false;
+    tuneKd = false;
+    freeSpins = false;
+    display.clearDisplay();
   }
 }
