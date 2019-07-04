@@ -24,7 +24,7 @@ int potVal, oldPot, correction;
 int PWMleft = 300;
 int PWMright = 300;
 float Kp = 50;
-float Kd = 3000;
+float Kd = 100;
 int lastSwitch = millis();
 int tPrev, tCurrent;
 float thresh = 2;
@@ -65,7 +65,7 @@ void setup() {
   pinMode(rightQRD, INPUT_PULLUP);
   pinMode(leftestQRD, INPUT_PULLUP);
   pinMode(rightestQRD, INPUT_PULLUP);
-  // attachInterrupt(digitalPinToInterrupt(button), change_mode, FALLING);
+  attachInterrupt(digitalPinToInterrupt(button), change_mode, FALLING);
 
 }
 
@@ -114,26 +114,20 @@ void loop() {
     updateError();
 
     correction = Kp*error + Kd*calcDerivative(); // Correction tend to be + when right of tape
-    
-    // if (correction > 75) {
-    //   correction = 75;
-    // } else if (correction < -75) {
-    //   correction = -75;
-    // }
 
     // Change motor PWM values
     if (PWMleft-correction > 100 && PWMleft-correction < 500) {
       PWMleft -= correction;
-    } else if (PWMleft-correction > 100) {
+    } else if (PWMleft-correction < 100) {
       PWMleft = 100;
-    } else if (PWMleft-correction < 500) {
+    } else if (PWMleft-correction > 500) {
       PWMleft = 500;
     }
     if (PWMright+correction > 100 && PWMright+correction < 500) {
       PWMright += correction;
-    } else if (PWMright+correction > 100) {
+    } else if (PWMright+correction < 100) {
       PWMright = 100;
-    } else if (PWMright+correction < 500) {
+    } else if (PWMright+correction > 500) {
       PWMright = 500;
     }
 
@@ -142,6 +136,7 @@ void loop() {
     // Serial.println(correction);
     // Serial.println(PWMleft);
     // Serial.println(PWMright);
+    // delay(1000);
   }
 }
 
@@ -157,36 +152,42 @@ void updateError(void) {
     } else if (!digitalRead(leftestQRD) && !digitalRead(leftQRD) && digitalRead(rightQRD) && !digitalRead(rightestQRD)) {
       // Misaligned leftish
       left = true;
+      right = false;
       error = -1;
       Serial.println("leftish");
       
     } else if (!digitalRead(leftestQRD) && digitalRead(leftQRD) && !digitalRead(rightQRD) && !digitalRead(rightestQRD)) {
       // Misaligned rightish
       right = true;
+      left = false;
       error = 1;
       Serial.println("rightish");
       
     } else if (!digitalRead(leftestQRD) && !digitalRead(leftQRD) && digitalRead(rightQRD) && digitalRead(rightestQRD)) {
       // Misaligned left
       left = true;
+      right = false;
       error = -3;
       Serial.println("left");
 
     } else if (digitalRead(leftestQRD) && digitalRead(leftQRD) && !digitalRead(rightQRD)&& !digitalRead(rightestQRD)) {
       // Misaligned right
       right = true;
+      left = false;
       error = 3;
       Serial.println("right");
 
     } else if (!digitalRead(leftestQRD) && !digitalRead(leftQRD) && !digitalRead(rightQRD) && digitalRead(rightestQRD)){
       // Misaligned quite left
       left = true;
+      right = false;
       error = -5;
       Serial.println("quite left");
 
     } else if (digitalRead(leftestQRD) && !digitalRead(leftQRD) && !digitalRead(rightQRD) && !digitalRead(rightestQRD)) {
       // Misaligned quite right
       right = true;
+      left = false;
       error = 5;
       Serial.println("quite right");
 
@@ -218,19 +219,20 @@ void updateError(void) {
 }
 
 int calcDerivative(void) {
-  int derivative;
+  double derivative;
   if (error == lastError) {
     // Same state
     tCurrent = millis() - lastSwitch;
-    derivative = deltaError/(tPrev + tCurrent);
+    derivative = 1000.0*deltaError/(tPrev + tCurrent);
   } else {
     // New state
     deltaError = error - lastError;
     tPrev = millis() - lastSwitch;
     lastSwitch = millis();
-    derivative = deltaError/tPrev; // tCurrent is 0 at the moment of a state change
+    derivative = 1000.0*deltaError/tPrev; // tCurrent is 0 at the moment of a state change
     lastError = error;
   }
+  Serial.println(derivative);
   return derivative;
 }
 
@@ -239,16 +241,16 @@ int calcDerivative(void) {
 //tuneKd mode changes Kd with potentiometer
 //tuneThresh mode changes QRD threshold with potentiometer
 //default mode (both false) tries to follow tape
-// void change_mode(void) {
-//   if (!tuneKp && !tuneKd && !tuneThresh) {
-//     tuneKp = true;
-//   } else if (tuneKp) {
-//       tuneKp = false;
-//       tuneKd = true;
-//   } else if (tuneKd) {
-//       tuneKd = false;
-//       tuneThresh = true;
-//   } else if (tuneThresh) {
-//       tuneThresh = false;
-//   }
-// }
+void change_mode(void) {
+  if (!tuneKp && !tuneKd && !tuneThresh) {
+    tuneKp = true;
+  } else if (tuneKp) {
+      tuneKp = false;
+      tuneKd = true;
+  } else if (tuneKd) {
+      tuneKd = false;
+      tuneThresh = true;
+  } else if (tuneThresh) {
+      tuneThresh = false;
+  }
+}
