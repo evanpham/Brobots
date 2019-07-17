@@ -4,10 +4,6 @@
 #include <FreeMono12pt7b.h>
 #include <time.h>
 
-// #if (SSD1306_LCDHEIGHT != 64)
-// #error("Height incorrect, please fix Adafruit_SSD1306.h!");
-// #endif
-
 #define OLED_RESET -1  // Not used
 Adafruit_SSD1306 display(OLED_RESET);
 
@@ -24,7 +20,7 @@ int potVal, oldPot, correction;
 int PWMleft = 300;
 int PWMright = 300;
 float Kp = 50;
-float Kd = 3000;
+float Kd = 30;
 int lastSwitch = millis();
 int tPrev, tCurrent;
 float thresh = 2;
@@ -124,16 +120,16 @@ void loop() {
     // Change motor PWM values
     if (PWMleft-correction > 100 && PWMleft-correction < 500) {
       PWMleft -= correction;
-    } else if (PWMleft-correction > 100) {
+    } else if (PWMleft-correction < 100) {
       PWMleft = 100;
-    } else if (PWMleft-correction < 500) {
+    } else if (PWMleft-correction > 500) {
       PWMleft = 500;
     }
     if (PWMright+correction > 100 && PWMright+correction < 500) {
       PWMright += correction;
-    } else if (PWMright+correction > 100) {
+    } else if (PWMright+correction < 100) {
       PWMright = 100;
-    } else if (PWMright+correction < 500) {
+    } else if (PWMright+correction > 500) {
       PWMright = 500;
     }
 
@@ -142,11 +138,15 @@ void loop() {
     // Serial.println(correction);
     // Serial.println(PWMleft);
     // Serial.println(PWMright);
+    // Serial.println();
+    // delay(1000);
   }
 }
 
 void updateError(void) {
   // Main PID control sequence
+
+  /// MAYBE SET RIGHT & LEFT FALSE IN EVERY CONDITION
     if (!digitalRead(leftestQRD) && digitalRead(leftQRD) && digitalRead(rightQRD) && !digitalRead(rightestQRD)) {
       // Centered
       left = false;
@@ -157,36 +157,42 @@ void updateError(void) {
     } else if (!digitalRead(leftestQRD) && !digitalRead(leftQRD) && digitalRead(rightQRD) && !digitalRead(rightestQRD)) {
       // Misaligned leftish
       left = true;
+      right = false;
       error = -1;
       Serial.println("leftish");
       
     } else if (!digitalRead(leftestQRD) && digitalRead(leftQRD) && !digitalRead(rightQRD) && !digitalRead(rightestQRD)) {
       // Misaligned rightish
       right = true;
+      left = false;
       error = 1;
       Serial.println("rightish");
       
     } else if (!digitalRead(leftestQRD) && !digitalRead(leftQRD) && digitalRead(rightQRD) && digitalRead(rightestQRD)) {
       // Misaligned left
       left = true;
+      right = false;
       error = -3;
       Serial.println("left");
 
     } else if (digitalRead(leftestQRD) && digitalRead(leftQRD) && !digitalRead(rightQRD)&& !digitalRead(rightestQRD)) {
       // Misaligned right
       right = true;
+      left = false;
       error = 3;
       Serial.println("right");
 
     } else if (!digitalRead(leftestQRD) && !digitalRead(leftQRD) && !digitalRead(rightQRD) && digitalRead(rightestQRD)){
       // Misaligned quite left
       left = true;
+      right = false;
       error = -5;
       Serial.println("quite left");
 
     } else if (digitalRead(leftestQRD) && !digitalRead(leftQRD) && !digitalRead(rightQRD) && !digitalRead(rightestQRD)) {
       // Misaligned quite right
       right = true;
+      left = false;
       error = 5;
       Serial.println("quite right");
 
@@ -218,19 +224,21 @@ void updateError(void) {
 }
 
 int calcDerivative(void) {
-  int derivative;
+  float derivative;
   if (error == lastError) {
     // Same state
     tCurrent = millis() - lastSwitch;
-    derivative = deltaError/(tPrev + tCurrent);
+    derivative = 1000.0*deltaError/(tPrev + tCurrent);
   } else {
     // New state
     deltaError = error - lastError;
     tPrev = millis() - lastSwitch;
     lastSwitch = millis();
-    derivative = deltaError/tPrev; // tCurrent is 0 at the moment of a state change
+    derivative = 1000.0*deltaError/tPrev; // tCurrent is 0 at the moment of a state change
     lastError = error;
   }
+  Serial.println(derivative);
+  delay(100);
   return derivative;
 }
 

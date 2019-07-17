@@ -1,7 +1,7 @@
 #include <Arduino.h>
 #include <Wire.h>
 #include <Adafruit_SSD1306.h>
-#include <FreeMono12pt7b.h>
+#include <FreeMono9pt7b.h>
 #include <time.h>
 
 // #if (SSD1306_LCDHEIGHT != 64)
@@ -12,24 +12,42 @@
 Adafruit_SSD1306 display(OLED_RESET);
 
 #define pot PA2
-#define button PB12
+#define button PA12
 #define motorL PA0
 #define motorR PB0
 #define leftQRD PB10
 #define leftestQRD PB11
 #define rightQRD PA4
 #define rightestQRD PA3
+#define trig PB14
+#define echo PB13
 
 int potVal, oldPot, correction;
-int PWMleft = 300;
-int PWMright = 300;
-float Kp = 40;
-float Kd = 120;
+int minPWM = 0
+;
+int maxPWM = 500;
+int PWMleft = (maxPWM - minPWM)/2;
+int PWMright = (maxPWM - minPWM)/2;
+
+float Kp = 35.0;
+float Kd = 35.0;
+
+int last = millis(); // Timer used to limit mode changes
+
+// Timers used for derivative calculations
 int lastSwitch = millis();
 int tPrev, tCurrent;
+
+// Bools for split handling
+bool stayLeft = true;
+bool splitting = false;
+
+// Bools for mode tracking/changing
 bool tuneKp = false;
 bool tuneKd = false;
 bool freeSpins = false;
+
+// Bools
 bool left = false;
 bool right = false;
 
@@ -38,8 +56,9 @@ int error, lastError, deltaError = 0;
 float inc = 1;
 
 void change_mode(void);
-int calcDerivative(void);
+float calcDerivative(void);
 void updateError(void);
+int readSonar(void);
 
 void setup() {
   Serial.begin(9600);
@@ -51,9 +70,16 @@ void setup() {
   display.clearDisplay();
   display.setTextSize(1);
   display.setTextColor(WHITE);
-  display.setFont(&FreeMono12pt7b);
-  display.setCursor(6,30);
-  display.println("Jarvis Booting Up...");
+  display.setFont(&FreeMono9pt7b);
+  display.setCursor(3,10);
+  display.println("Edith");
+  display.println("Booting");
+  display.println("Up...");
+  display.display();
+  delay(1000);
+  display.clearDisplay();
+  display.setCursor(20,40);
+  display.println("GOING!");
   display.display();
 
   pinMode(button, INPUT_PULLUP);
@@ -61,12 +87,17 @@ void setup() {
   pinMode(rightQRD, INPUT_PULLUP);
   pinMode(leftestQRD, INPUT_PULLUP);
   pinMode(rightestQRD, INPUT_PULLUP);
-  attachInterrupt(digitalPinToInterrupt(button), change_mode, FALLING);
+  pinMode(trig, OUTPUT);
+  pinMode(echo, INPUT);
+  // attachInterrupt(digitalPinToInterrupt(button), change_mode, LOW);
 
 }
 
 void loop() {
   oldPot = potVal;
+  if (!digitalRead(button)) {
+    change_mode();
+  }
 
   if (tuneKp) {
     // Tune Kp mode (Turn off motors)
@@ -85,7 +116,7 @@ void loop() {
     display.print(Kp);
     display.display();
 
-  } else if (tuneKd) {
+    } else if (tuneKd) {
     // Tune Kd mode (Turn motors off)
     pwm_stop(PA_0);
     pwm_stop(PB_0);
@@ -102,7 +133,7 @@ void loop() {
     display.print(Kd);
     display.display();
 
-  } else if (freeSpins) {
+    } else if (freeSpins) {
     // Free potentiometer spins (Turn motors off)
     pwm_stop(PA_0);
     pwm_stop(PB_0);
@@ -112,26 +143,26 @@ void loop() {
     display.print("FREE SPINS");
     display.display();
 
-  } else {
+    } else {
     // Main PID sequence
     updateError();
 
     correction = Kp*error + Kd*calcDerivative(); // Correction tend to be + when right of tape
 
     // Change motor PWM values
-    if (PWMleft-correction > 100 && PWMleft-correction < 500) {
+    if (PWMleft-correction > minPWM && PWMleft-correction < maxPWM) {
       PWMleft -= correction;
-    } else if (PWMleft-correction < 100) {
-      PWMleft = 100;
-    } else if (PWMleft-correction > 500) {
-      PWMleft = 500;
+    } else if (PWMleft-correction < minPWM) {
+      PWMleft = minPWM;
+    } else if (PWMleft-correction > maxPWM) {
+      PWMleft = maxPWM;
     }
-    if (PWMright+correction > 100 && PWMright+correction < 500) {
+    if (PWMright+correction > minPWM && PWMright+correction < maxPWM) {
       PWMright += correction;
-    } else if (PWMright+correction < 100) {
-      PWMright = 100;
-    } else if (PWMright+correction > 500) {
-      PWMright = 500;
+    } else if (PWMright+correction < minPWM) {
+      PWMright = minPWM;
+    } else if (PWMright+correction > maxPWM) {
+      PWMright = maxPWM;
     }
 
     pwm_start(PB_0, 100000, 500, PWMright, 1);
@@ -206,22 +237,77 @@ void updateError(void) {
 
     }
 
-    // Serial.println("Rightest");
-    // Serial.println(digitalRead(rightestQRD));
+    // Split conditions
+    if (digitalRead(leftestQRD) && digitalRead(leftQRD) && digitalRead(rightQRD) && digitalRead(rightestQRD)) {
+      // If staying left, right. If staying right, left
+      error = stayLeft ? 5 : -5;
+      left = !stayLeft;
+      right = stayLeft;
+      splitting = true;
+    }
+    if (digitalRead(leftestQRD) && digitalRead(leftQRD) && digitalRead(rightQRD) && !digitalRead(rightestQRD)) {
+        //bool?true:false
+      // If staying left, either right or quite right. If staying right, either centered or leftish
+      error = stayLeft ? 6 : -2;
+      left = !stayLeft;
+      right = stayLeft;
+      splitting = true;
+    } else if (!digitalRead(leftestQRD) && digitalRead(leftQRD) && digitalRead(rightQRD) && digitalRead(rightestQRD)) {
+      // If staying left, either centered of rightish. If staying right, either left or quite left
+      error = stayLeft ? 2 : -6;
+      left = !stayLeft;
+      right = stayLeft;
+      splitting = true;
+    } else if (digitalRead(leftestQRD) && !digitalRead(leftQRD) && digitalRead(rightQRD) && !digitalRead(rightestQRD)) {
+      // If staying left, quite right. If staying right, leftish
+      error = stayLeft ? 7 : -2;
+      left = !stayLeft;
+      right = stayLeft;
+      splitting = true;
+    } else if (!digitalRead(leftestQRD) && digitalRead(leftQRD) && !digitalRead(rightQRD) && digitalRead(rightestQRD)) {
+      // If staying left, rightish. If staying right, quite left
+      error = stayLeft ? 2 : -7;
+      left = !stayLeft;
+      right = stayLeft;
+      splitting = true;
+    } else if (digitalRead(leftestQRD) && !digitalRead(leftQRD) && digitalRead(rightQRD) && digitalRead(rightestQRD)) {
+      // If staying left, quite right. If staying right, left
+      error = stayLeft ? 7 : -5;
+      left = !stayLeft;
+      right = stayLeft;
+      splitting = true;
+    } else if (digitalRead(leftestQRD) && digitalRead(leftQRD) && !digitalRead(rightQRD) && digitalRead(rightestQRD)) {
+      // If staying left, right. If staying right, quite left
+      error = stayLeft ? 5 : -7;
+      left = !stayLeft;
+      right = stayLeft;
+      splitting = true;
+    } else if (digitalRead(leftestQRD) && !digitalRead(leftQRD) && !digitalRead(rightQRD) && digitalRead(rightestQRD)) {
+      // If staying left, quite right. If staying right, quite left
+      error = stayLeft ? 7 : -7;
+      left = !stayLeft;
+      right = stayLeft;
+      splitting = true;
+    }
 
-    // Serial.println("Right");
-    // Serial.println(digitalRead(rightQRD));
+    Serial.println(error);
+    Serial.println(left);
+    Serial.println("Rightest");
+    Serial.println(digitalRead(rightestQRD));
 
-    // Serial.println("Left");
-    // Serial.println(digitalRead(leftQRD));
+    Serial.println("Right");
+    Serial.println(digitalRead(rightQRD));
 
-    // Serial.println("Leftest");
-    // Serial.println(digitalRead(leftestQRD));
-    // delay(1000);
+    Serial.println("Left");
+    Serial.println(digitalRead(leftQRD));
+
+    Serial.println("Leftest");
+    Serial.println(digitalRead(leftestQRD));
+    delay(1000);
 
 }
 
-int calcDerivative(void) {
+float calcDerivative(void) {
   double derivative;
   if (error == lastError) {
     // Same state
@@ -245,8 +331,8 @@ int calcDerivative(void) {
 //freeSpins mode changes QRD threshold with potentiometer
 //default mode (both false) tries to follow tape
 void change_mode(void) {
-  Serial.println("YO");
-
+  delay(100);
+  if (millis() - last > 1000 && !digitalRead(button)) {
   // move to next mode
   if (!tuneKp && !tuneKd && !freeSpins) {
     tuneKp = true;
@@ -266,4 +352,28 @@ void change_mode(void) {
     freeSpins = false;
     display.clearDisplay();
   }
+  last = millis();
+  }
+}
+
+// Reads distance with sonar sensor
+// Returns distance in cm
+int readSonar(void) {
+  // Clear the trigPin by setting it LOW:
+  digitalWrite(trig, LOW);
+  delayMicroseconds(5);
+  // Trigger the sensor by setting the trigPin high for 10 microseconds:
+  digitalWrite(trig, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(trig, LOW);
+
+  // Read the echoPin, pulseIn() returns the duration (length of the pulse) in microseconds:
+  long duration = pulseIn(echo, HIGH);
+  // Calculate the distance:
+  int distance = duration*0.034/2;
+  
+  // Serial.print("Distance = ");
+  // Serial.print(distance);
+
+  return distance;
 }
