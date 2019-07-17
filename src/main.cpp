@@ -1,42 +1,84 @@
 #include <Arduino.h>
 #include <Wire.h>
 #include <Adafruit_SSD1306.h>
-#include <FreeMono12pt7b.h>
+#include <FreeMono9pt7b.h>
 #include <time.h>
+#include <Sonar.h>
+#include <Arm.h>
+
+// #if (SSD1306_LCDHEIGHT != 64)
+// #error("Height incorrect, please fix Adafruit_SSD1306.h!");
+// #endif
 
 #define OLED_RESET -1  // Not used
 Adafruit_SSD1306 display(OLED_RESET);
 
-#define pot PA5
-#define button PB12
-#define motorL PA0
-#define motorR PB0
+#define pot PA2
+#define button PA12
+#define motorL PA_0
+#define motorR PB_0
 #define leftQRD PB10
 #define leftestQRD PB11
 #define rightQRD PA4
 #define rightestQRD PA3
+#define upEcho PB12
+#define upTrig PB13
+#define outEcho PB14
+#define outTrig PB15
+#define baseServo PB_4
+#define clawServo PA_5
+#define armOut PA_6
+#define armIn PA_7
+#define armUp PA_3
+#define armDown PA_2
 
-int potVal, oldPot, correction;
-int PWMleft = 300;
-int PWMright = 300;
-float Kp = 50;
-float Kd = 30;
+// PWM limits, right and left value, and correction value
+int correction;
+int minPWM = 0;
+int maxPWM = 400;
+int PWMleft = (maxPWM - minPWM)/2;
+int PWMright = (maxPWM - minPWM)/2;
+
+// PID gains, tuning pot, increment, and error variables
+float Kp = 65.0;
+float Kd = 65.0;
+float inc = 1;
+int potVal, oldPot;
+int error, lastError, deltaError = 0;
+
+// Timers used for derivative calculations
 int lastSwitch = millis();
 int tPrev, tCurrent;
-float thresh = 2;
+
+// Bools for split handling
+bool stayLeft = false;
+bool splitting = false;
+
+// Bools for mode tracking/changing
 bool tuneKp = false;
 bool tuneKd = false;
-bool tuneThresh = false;
+bool freeSpins = false;
+bool moving = false;
+
+// Bools
 bool left = false;
 bool right = false;
 
-
-int error, lastError, deltaError = 0;
-int inc = 0.25;
-
+// Function prototypes
 void change_mode(void);
-int calcDerivative(void);
+float calcDerivative(void);
 void updateError(void);
+int readSonar(void);
+void getStone(Arm a);
+
+// Arm and Sonar initialization
+// out and up are sonars which measure distance out and up respectively
+// All other inputs are pin names corresponding to specific control pins
+// Ex. armUp is a pin which, when powered, moves the arm up
+Sonar up(upEcho, upTrig);
+Sonar out(outEcho, outTrig); 
+Arm arm(baseServo, clawServo, armOut, armIn, armUp, armDown, out, up);
+
 
 void setup() {
   Serial.begin(9600);
@@ -44,16 +86,20 @@ void setup() {
   display.begin(SSD1306_SWITCHCAPVCC, 0x3C);  // initialize with the I2C addr 0x3C (for the 128x64)
   // init done
 
-  // Draw a test
+  // Startup display
   display.clearDisplay();
-  display.setTextSize(1);
-  display.setTextColor(WHITE);
-  display.setCursor(0,0);
-  display.println("OLED Display 128x64");
-  display.setFont(&FreeMono12pt7b);
-  display.drawPixel(0,45,WHITE);
-  display.setCursor(4,45);
-  display.println("Welcome!");
+  // display.setTextSize(1);
+  // display.setTextColor(WHITE);
+  display.setFont(&FreeMono9pt7b);
+  display.setCursor(3,10);
+  display.println("Edith");
+  display.println("Booting");
+  display.println("Up...");
+  display.display();
+  delay(1000);
+  display.clearDisplay();
+  display.setCursor(20,40);
+  display.println("ZOOM!");
   display.display();
 
   pinMode(button, INPUT_PULLUP);
@@ -61,18 +107,22 @@ void setup() {
   pinMode(rightQRD, INPUT_PULLUP);
   pinMode(leftestQRD, INPUT_PULLUP);
   pinMode(rightestQRD, INPUT_PULLUP);
-  // attachInterrupt(digitalPinToInterrupt(button), change_mode, FALLING);
+  // attachInterrupt(digitalPinToInterrupt(button), change_mode, LOW);
 
 }
 
 void loop() {
-  oldPot = potVal;
+  // Read mode change button
+  if (!digitalRead(button)) {
+    change_mode();
+  }
 
   if (tuneKp) {
-    // Tune Kp mode (first in cycle of modes, turn off motors)
-    pwm_stop(PA_0);
-    pwm_stop(PB_0);
+    // Tune Kp mode (Turn off motors)
+    pwm_stop(motorL);
+    pwm_stop(motorR);
 
+    oldPot = potVal;
     potVal = analogRead(pot);
     if (potVal > oldPot) {
       Kp += inc;
@@ -86,7 +136,11 @@ void loop() {
     display.display();
 
   } else if (tuneKd) {
-    // Tune Kd mode
+    // Tune Kd mode (Turn motors off)
+    pwm_stop(motorL);
+    pwm_stop(motorR);
+
+    oldPot = potVal;
     potVal = analogRead(pot);
     if (potVal > oldPot) {
       Kd += inc;
@@ -99,54 +153,59 @@ void loop() {
     display.print(Kd);
     display.display();
 
-  } else if (tuneThresh) {
+  } else if (freeSpins) {
+    // Free potentiometer spins (Turn motors off)
+    pwm_stop(motorL);
+    pwm_stop(motorR);
+
     display.clearDisplay();
+    display.setCursor(4,40);
+    display.print("FREE SPINS");
     display.display();
-    Serial.print("FREE SPINS");
-    delay(1000);
 
   } else {
+    // If not moving, ramp up speed
+    if (!moving) {
+      for (int PWMval = 0; PWMval < PWMleft; PWMval++) {
+        pwm_start(motorR, 100000, 500, PWMval, 1);
+        pwm_start(motorL, 100000, 500, PWMval, 1);
+        delay(2);
+      }
+      moving = true;
+    }
+
     // Main PID sequence
     updateError();
 
     correction = Kp*error + Kd*calcDerivative(); // Correction tend to be + when right of tape
-    
-    // if (correction > 75) {
-    //   correction = 75;
-    // } else if (correction < -75) {
-    //   correction = -75;
-    // }
 
     // Change motor PWM values
-    if (PWMleft-correction > 100 && PWMleft-correction < 500) {
+    if (PWMleft-correction > minPWM && PWMleft-correction < maxPWM) {
       PWMleft -= correction;
-    } else if (PWMleft-correction < 100) {
-      PWMleft = 100;
-    } else if (PWMleft-correction > 500) {
-      PWMleft = 500;
+    } else if (PWMleft-correction < minPWM) {
+      PWMleft = minPWM;
+    } else if (PWMleft-correction > maxPWM) {
+      PWMleft = maxPWM;
     }
-    if (PWMright+correction > 100 && PWMright+correction < 500) {
+    if (PWMright+correction > minPWM && PWMright+correction < maxPWM) {
       PWMright += correction;
-    } else if (PWMright+correction < 100) {
-      PWMright = 100;
-    } else if (PWMright+correction > 500) {
-      PWMright = 500;
+    } else if (PWMright+correction < minPWM) {
+      PWMright = minPWM;
+    } else if (PWMright+correction > maxPWM) {
+      PWMright = maxPWM;
     }
 
-    pwm_start(PB_0, 100000, 500, PWMright, 1);
-    pwm_start(PA_0, 100000, 500, PWMleft, 1);
+    pwm_start(motorR, 100000, 500, PWMright, 1);
+    pwm_start(motorL, 100000, 500, PWMleft, 1);
     // Serial.println(correction);
     // Serial.println(PWMleft);
     // Serial.println(PWMright);
-    // Serial.println();
     // delay(1000);
   }
 }
 
 void updateError(void) {
   // Main PID control sequence
-
-  /// MAYBE SET RIGHT & LEFT FALSE IN EVERY CONDITION
     if (!digitalRead(leftestQRD) && digitalRead(leftQRD) && digitalRead(rightQRD) && !digitalRead(rightestQRD)) {
       // Centered
       left = false;
@@ -208,6 +267,61 @@ void updateError(void) {
 
     }
 
+    // Split conditions
+    if (digitalRead(leftestQRD) && digitalRead(leftQRD) && digitalRead(rightQRD) && digitalRead(rightestQRD)) {
+      // If staying left, right. If staying right, left
+      error = stayLeft ? 5 : -5;
+      left = !stayLeft;
+      right = stayLeft;
+      splitting = true;
+    }
+    if (digitalRead(leftestQRD) && digitalRead(leftQRD) && digitalRead(rightQRD) && !digitalRead(rightestQRD)) {
+        //bool?true:false
+      // If staying left, either right or quite right. If staying right, either centered or leftish
+      error = stayLeft ? 6 : -2;
+      left = !stayLeft;
+      right = stayLeft;
+      splitting = true;
+    } else if (!digitalRead(leftestQRD) && digitalRead(leftQRD) && digitalRead(rightQRD) && digitalRead(rightestQRD)) {
+      // If staying left, either centered of rightish. If staying right, either left or quite left
+      error = stayLeft ? 2 : -6;
+      left = !stayLeft;
+      right = stayLeft;
+      splitting = true;
+    } else if (digitalRead(leftestQRD) && !digitalRead(leftQRD) && digitalRead(rightQRD) && !digitalRead(rightestQRD)) {
+      // If staying left, quite right. If staying right, leftish
+      error = stayLeft ? 7 : -2;
+      left = !stayLeft;
+      right = stayLeft;
+      splitting = true;
+    } else if (!digitalRead(leftestQRD) && digitalRead(leftQRD) && !digitalRead(rightQRD) && digitalRead(rightestQRD)) {
+      // If staying left, rightish. If staying right, quite left
+      error = stayLeft ? 2 : -7;
+      left = !stayLeft;
+      right = stayLeft;
+      splitting = true;
+    } else if (digitalRead(leftestQRD) && !digitalRead(leftQRD) && digitalRead(rightQRD) && digitalRead(rightestQRD)) {
+      // If staying left, quite right. If staying right, left
+      error = stayLeft ? 7 : -5;
+      left = !stayLeft;
+      right = stayLeft;
+      splitting = true;
+    } else if (digitalRead(leftestQRD) && digitalRead(leftQRD) && !digitalRead(rightQRD) && digitalRead(rightestQRD)) {
+      // If staying left, right. If staying right, quite left
+      error = stayLeft ? 5 : -7;
+      left = !stayLeft;
+      right = stayLeft;
+      splitting = true;
+    } else if (digitalRead(leftestQRD) && !digitalRead(leftQRD) && !digitalRead(rightQRD) && digitalRead(rightestQRD)) {
+      // If staying left, quite right. If staying right, quite left
+      error = stayLeft ? 7 : -7;
+      left = !stayLeft;
+      right = stayLeft;
+      splitting = true;
+    }
+
+    // Serial.println(error);
+    // Serial.println(left);
     // Serial.println("Rightest");
     // Serial.println(digitalRead(rightestQRD));
 
@@ -223,8 +337,8 @@ void updateError(void) {
 
 }
 
-int calcDerivative(void) {
-  float derivative;
+float calcDerivative(void) {
+  double derivative;
   if (error == lastError) {
     // Same state
     tCurrent = millis() - lastSwitch;
@@ -237,26 +351,51 @@ int calcDerivative(void) {
     derivative = 1000.0*deltaError/tPrev; // tCurrent is 0 at the moment of a state change
     lastError = error;
   }
-  Serial.println(derivative);
-  delay(100);
+  // Serial.println(derivative);
   return derivative;
 }
 
-//shift mode by button press
-//tuneKp mode changes Kp with potentiometer
-//tuneKd mode changes Kd with potentiometer
-//tuneThresh mode changes QRD threshold with potentiometer
-//default mode (both false) tries to follow tape
-// void change_mode(void) {
-//   if (!tuneKp && !tuneKd && !tuneThresh) {
-//     tuneKp = true;
-//   } else if (tuneKp) {
-//       tuneKp = false;
-//       tuneKd = true;
-//   } else if (tuneKd) {
-//       tuneKd = false;
-//       tuneThresh = true;
-//   } else if (tuneThresh) {
-//       tuneThresh = false;
-//   }
-// }
+// Shift mode by button press
+// tuneKp mode changes Kp with potentiometer
+// tuneKd mode changes Kd with potentiometer
+// freeSpins mode changes QRD threshold with potentiometer
+// Default mode (all others false) tries to follow tape
+void change_mode(void) {
+  // Mark moving boolean as false to trigger ramp up when motion is resumed
+  moving = false;
+  delay(100);
+
+  // Continue if button still pressed after delay (helps combat noise)
+  if (!digitalRead(button)) {
+    // move to next mode
+    if (!tuneKp && !tuneKd && !freeSpins) {
+      tuneKp = true;
+      tuneKd = false;
+      freeSpins = false;
+    } else if (tuneKp) {
+      tuneKp = false;
+      tuneKd = true;
+      freeSpins = false;
+    } else if (tuneKd) {
+      tuneKd = false;
+      tuneKp = false;
+      freeSpins = true;
+    } else if (freeSpins) {
+      tuneKp = false;
+      tuneKd = false;
+      freeSpins = false;
+      display.clearDisplay();
+      display.setCursor(20,40);
+      display.println("ZOOM!");
+      display.display();
+    }
+  }
+}
+
+// Function for aqcuiring a stone from a pillar
+// a is the Arm object which controls all motion of the robot arm and claw
+// Motion must include outward motion to pillar, upward motion to stone, claw closure,
+// deposition maneuvering, and claw openning, and return to default position
+void getStone(Arm a) {
+
+}
