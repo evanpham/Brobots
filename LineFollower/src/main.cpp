@@ -23,14 +23,13 @@ Adafruit_SSD1306 display(OLED_RESET);
 #define echo PB13
 
 int potVal, oldPot, correction;
-int minPWM = 0
-;
-int maxPWM = 500;
+int minPWM = 0;
+int maxPWM = 400;
 int PWMleft = (maxPWM - minPWM)/2;
 int PWMright = (maxPWM - minPWM)/2;
 
-float Kp = 35.0;
-float Kd = 35.0;
+float Kp = 65.0;
+float Kd = 65.0;
 
 int last = millis(); // Timer used to limit mode changes
 
@@ -39,13 +38,14 @@ int lastSwitch = millis();
 int tPrev, tCurrent;
 
 // Bools for split handling
-bool stayLeft = true;
+bool stayLeft = false;
 bool splitting = false;
 
 // Bools for mode tracking/changing
 bool tuneKp = false;
 bool tuneKd = false;
 bool freeSpins = false;
+bool moving = false;
 
 // Bools
 bool left = false;
@@ -79,7 +79,7 @@ void setup() {
   delay(1000);
   display.clearDisplay();
   display.setCursor(20,40);
-  display.println("GOING!");
+  display.println("ZOOM!");
   display.display();
 
   pinMode(button, INPUT_PULLUP);
@@ -94,7 +94,7 @@ void setup() {
 }
 
 void loop() {
-  oldPot = potVal;
+  // Read mode change button
   if (!digitalRead(button)) {
     change_mode();
   }
@@ -104,6 +104,7 @@ void loop() {
     pwm_stop(PA_0);
     pwm_stop(PB_0);
 
+    oldPot = potVal;
     potVal = analogRead(pot);
     if (potVal > oldPot) {
       Kp += inc;
@@ -121,6 +122,7 @@ void loop() {
     pwm_stop(PA_0);
     pwm_stop(PB_0);
 
+    oldPot = potVal;
     potVal = analogRead(pot);
     if (potVal > oldPot) {
       Kd += inc;
@@ -144,6 +146,16 @@ void loop() {
     display.display();
 
     } else {
+    // If not moving, ramp up speed
+    if (!moving) {
+      for (int PWMval = 0; PWMval < PWMleft; PWMval++) {
+        pwm_start(PB_0, 100000, 500, PWMval, 1);
+        pwm_start(PA_0, 100000, 500, PWMval, 1);
+        delay(2);
+      }
+      moving = true;
+    }
+
     // Main PID sequence
     updateError();
 
@@ -290,20 +302,20 @@ void updateError(void) {
       splitting = true;
     }
 
-    Serial.println(error);
-    Serial.println(left);
-    Serial.println("Rightest");
-    Serial.println(digitalRead(rightestQRD));
+    // Serial.println(error);
+    // Serial.println(left);
+    // Serial.println("Rightest");
+    // Serial.println(digitalRead(rightestQRD));
 
-    Serial.println("Right");
-    Serial.println(digitalRead(rightQRD));
+    // Serial.println("Right");
+    // Serial.println(digitalRead(rightQRD));
 
-    Serial.println("Left");
-    Serial.println(digitalRead(leftQRD));
+    // Serial.println("Left");
+    // Serial.println(digitalRead(leftQRD));
 
-    Serial.println("Leftest");
-    Serial.println(digitalRead(leftestQRD));
-    delay(1000);
+    // Serial.println("Leftest");
+    // Serial.println(digitalRead(leftestQRD));
+    // delay(1000);
 
 }
 
@@ -331,49 +343,31 @@ float calcDerivative(void) {
 //freeSpins mode changes QRD threshold with potentiometer
 //default mode (both false) tries to follow tape
 void change_mode(void) {
+  moving = false;
   delay(100);
-  if (millis() - last > 1000 && !digitalRead(button)) {
-  // move to next mode
-  if (!tuneKp && !tuneKd && !freeSpins) {
-    tuneKp = true;
-    tuneKd = false;
-    freeSpins = false;
-  } else if (tuneKp) {
-    tuneKp = false;
-    tuneKd = true;
-    freeSpins = false;
-  } else if (tuneKd) {
-    tuneKd = false;
-    tuneKp = false;
-    freeSpins = true;
-  } else if (freeSpins) {
-    tuneKp = false;
-    tuneKd = false;
-    freeSpins = false;
-    display.clearDisplay();
+  if (!digitalRead(button)) {
+    // move to next mode
+    if (!tuneKp && !tuneKd && !freeSpins) {
+      tuneKp = true;
+      tuneKd = false;
+      freeSpins = false;
+    } else if (tuneKp) {
+      tuneKp = false;
+      tuneKd = true;
+      freeSpins = false;
+    } else if (tuneKd) {
+      tuneKd = false;
+      tuneKp = false;
+      freeSpins = true;
+    } else if (freeSpins) {
+      tuneKp = false;
+      tuneKd = false;
+      freeSpins = false;
+      display.clearDisplay();
+      display.setCursor(20,40);
+      display.println("ZOOM!");
+      display.display();
+    }
+    last = millis();
   }
-  last = millis();
-  }
-}
-
-// Reads distance with sonar sensor
-// Returns distance in cm
-int readSonar(void) {
-  // Clear the trigPin by setting it LOW:
-  digitalWrite(trig, LOW);
-  delayMicroseconds(5);
-  // Trigger the sensor by setting the trigPin high for 10 microseconds:
-  digitalWrite(trig, HIGH);
-  delayMicroseconds(10);
-  digitalWrite(trig, LOW);
-
-  // Read the echoPin, pulseIn() returns the duration (length of the pulse) in microseconds:
-  long duration = pulseIn(echo, HIGH);
-  // Calculate the distance:
-  int distance = duration*0.034/2;
-  
-  // Serial.print("Distance = ");
-  // Serial.print(distance);
-
-  return distance;
 }
