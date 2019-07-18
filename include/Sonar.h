@@ -8,6 +8,7 @@ class Sonar {
         int trig;
 
     public:
+        Sonar(){};
         Sonar(int echoPin, int trigPin);
 
         int readSonar();

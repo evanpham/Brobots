@@ -3,8 +3,8 @@
 #include <Adafruit_SSD1306.h>
 #include <FreeMono9pt7b.h>
 #include <time.h>
-#include <Sonar.h>
-#include <Arm.h>
+#include "Sonar.h"
+#include "Arm.h"
 
 // #if (SSD1306_LCDHEIGHT != 64)
 // #error("Height incorrect, please fix Adafruit_SSD1306.h!");
@@ -77,7 +77,7 @@ void getStone(Arm a);
 // Ex. armUp is a pin which, when powered, moves the arm up
 Sonar up(upEcho, upTrig);
 Sonar out(outEcho, outTrig); 
-Arm arm(baseServo, clawServo, armOut, armIn, armUp, armDown, out, up);
+//Arm arm(baseServo, clawServo, armOut, armIn, armUp, armDown, out, up);
 
 
 void setup() {

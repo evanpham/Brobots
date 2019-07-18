@@ -1,13 +1,13 @@
 #ifndef ARM_H
 #define ARM_H
 #include <Servo.h>
-#include <Sonar.h>
+#include "Sonar.h"
 
 class Arm {
     private:
         // Position readout sonars
-        Sonar upSonar;
-        Sonar outSonar;
+        Sonar *upSonar;
+        Sonar *outSonar;
 
         // Position control motors
         Servo baseServo;
@@ -18,7 +18,7 @@ class Arm {
         Servo clawServo;
     
     public:
-        Arm(PinName base, PinName claw, PinName outPin, PinName inPin, PinName upPin, PinName downPin, Sonar outS, Sonar upS);
+        Arm(PinName base, PinName claw, PinName outPin, PinName inPin, PinName upPin, PinName downPin, Sonar *outS, Sonar *upS);
 
         void open();
         void close();
