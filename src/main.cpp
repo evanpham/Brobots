@@ -13,7 +13,7 @@
 #define OLED_RESET -1  // Not used
 Adafruit_SSD1306 display(OLED_RESET);
 
-#define pot PA2
+#define pot PA5
 #define button PA12
 #define motorL PA_0
 #define motorR PB_0
@@ -21,6 +21,8 @@ Adafruit_SSD1306 display(OLED_RESET);
 #define leftestQRD PB11
 #define rightQRD PA4
 #define rightestQRD PA3
+#define leftSplitQRD PB3
+#define rightSplitQRD PB4
 #define upEcho PB12
 #define upTrig PB13
 #define outEcho PB14
@@ -324,10 +326,25 @@ void updateError(void) {
       error = stayLeft ? 15 : -15;
       splitProcedure();
 
+    } else if (digitalRead(leftSplitQRD) && stayLeft) {
+      // If the left split QRD is triggered and we want to stay left, hardcut left
+      PWMleft = 0;
+      PWMright = 500;
+      splitProcedure();
+
+    } else if (digitalRead(rightSplitQRD) && !stayLeft) {
+      // If the right split QRD is triggered and we want to stay right, hardcut right
+      PWMleft = 500;
+      PWMright = 0;
+      splitProcedure();
+
     }
 
     // Serial.println(error);
     // Serial.println(left);
+    //Serial.println("Right split");
+    // Serial.println(digitalRead(rightSplitQRD));
+
     // Serial.println("Rightest");
     // Serial.println(digitalRead(rightestQRD));
 
@@ -339,6 +356,9 @@ void updateError(void) {
 
     // Serial.println("Leftest");
     // Serial.println(digitalRead(leftestQRD));
+
+    //Serial.println("Left split");
+    // Serial.println(digitalRead(leftSplitQRD));
     // delay(1000);
   
     if (splits >= 2) {
