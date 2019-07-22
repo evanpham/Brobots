@@ -43,7 +43,7 @@ int splits = 0;
 
 // PID gains, tuning pot, increment, and error variables
 float Kp = 85.0;
-float Kd = 140.0;
+float Kd = 130.0;
 float inc = 1;
 int potVal, oldPot;
 int error, lastError, deltaError = 0;
@@ -336,7 +336,7 @@ void updateError(void) {
     // Serial.println(digitalRead(leftestQRD));
     // delay(1000);
   
-    if (splits >= 2) {
+    if (splits >= 1) {
       pwm_stop(motorL);
       pwm_stop(motorR);
       tuneKp = true;
