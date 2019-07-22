@@ -65,6 +65,7 @@ bool moving = false;
 
 // Bools for QRD logic
 bool left = false;
+bool center = false;
 bool right = false;
 
 // Function prototypes
@@ -199,18 +200,10 @@ void loop() {
 
 void updateError(void) {
   // Main PID control sequence
-    if (!digitalRead(leftestQRD) && digitalRead(leftQRD) && digitalRead(rightQRD) && !digitalRead(rightestQRD)) {
-      // Centered
-      left = false;
-      right = false;
-  
-      error = 0;
-      Serial.println("Centered");
-      noSplitProcedure();
-
-    } else if (!digitalRead(leftestQRD) && !digitalRead(leftQRD) && digitalRead(rightQRD) && !digitalRead(rightestQRD)) {
+    if (!digitalRead(leftestQRD) && !digitalRead(leftQRD) && digitalRead(rightQRD) && !digitalRead(rightestQRD)) {
       // Misaligned leftish
-      left = true;
+      left = false;
+      center = true;
       right = false;
 
       error = -1;
@@ -219,7 +212,8 @@ void updateError(void) {
 
     } else if (!digitalRead(leftestQRD) && digitalRead(leftQRD) && !digitalRead(rightQRD) && !digitalRead(rightestQRD)) {
       // Misaligned rightish
-      right = true;
+      right = false;
+      center = true;
       left = false;
 
       error = 1;
@@ -229,6 +223,7 @@ void updateError(void) {
     } else if (!digitalRead(leftestQRD) && !digitalRead(leftQRD) && digitalRead(rightQRD) && digitalRead(rightestQRD)) {
       // Misaligned left
       left = true;
+      center = false;
       right = false;
 
       error = -3;
@@ -237,8 +232,9 @@ void updateError(void) {
 
     } else if (digitalRead(leftestQRD) && digitalRead(leftQRD) && !digitalRead(rightQRD) && !digitalRead(rightestQRD)) {
       // Misaligned right
-      right = true;
       left = false;
+      center = false;
+      right = true;
 
       error = 3;
       Serial.println("right");
@@ -247,6 +243,7 @@ void updateError(void) {
     } else if (!digitalRead(leftestQRD) && !digitalRead(leftQRD) && !digitalRead(rightQRD) && digitalRead(rightestQRD)){
       // Misaligned quite left
       left = true;
+      center = false;
       right = false;
   
       error = -5;
@@ -255,28 +252,36 @@ void updateError(void) {
 
     } else if (digitalRead(leftestQRD) && !digitalRead(leftQRD) && !digitalRead(rightQRD) && !digitalRead(rightestQRD)) {
       // Misaligned quite right
-      right = true;
       left = false;
+      center = false;
+      right = true;
+      
   
       error = 5;
       Serial.println("quite right");
       noSplitProcedure();
 
     } else if (left) {
-      // Misaligned left
+      // Misaligned very left
       error = -8;
       Serial.println("v left");
       noSplitProcedure();
 
+    } else if (center) {
+      // Centered
+      error = 0;
+      Serial.println("Centered");
+      noSplitProcedure();
+
     } else if (right) {
-      // Misaligned right
+      // Misaligned very right
       error = 8;
       Serial.println("v right");
       noSplitProcedure();
     
     }
 
-    // // Split conditions
+    // Split conditions
     if (digitalRead(leftestQRD) && digitalRead(leftQRD) && digitalRead(rightQRD) && digitalRead(rightestQRD)) {
       // If staying left, right. If staying right, left
       error = stayLeft ? 11 : -11;
