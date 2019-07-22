@@ -69,7 +69,6 @@ bool right = false;
 
 // Function prototypes
 void updatePWMvalue(int max, int min, bool left);
-void resetPWMvalues(int max, int min);
 void splitProcedure(void);
 void noSplitProcedure(void);
 void change_mode(void);
@@ -183,11 +182,11 @@ void loop() {
       updatePWMvalue(maxPWM, minPWM, left = true);
       updatePWMvalue(maxPWM, minPWM, left = false);
     } else if (stayLeft) {
-      updatePWMvalue(maxPWM - 200, minPWM, left = true); // avg left PWM < avg right PWM
-      updatePWMvalue(maxPWM, minPWM + 200, left = false); // will turn bot left
+      updatePWMvalue(maxPWM - 400, minPWM, left = true); // avg left PWM < avg right PWM
+      updatePWMvalue(maxPWM, minPWM + 400, left = false); // will turn bot left
     } else {
-      updatePWMvalue(maxPWM, minPWM + 200, left = true); // avg right PWM < avg left PWM
-      updatePWMvalue(maxPWM - 200, minPWM, left = false); // will turn bot right
+      updatePWMvalue(maxPWM, minPWM + 400, left = true); // avg right PWM < avg left PWM
+      updatePWMvalue(maxPWM - 400, minPWM, left = false); // will turn bot right
     }
     pwm_start(motorR, 100000, 500, PWMright, 1);
     pwm_start(motorL, 100000, 500, PWMleft, 1);
