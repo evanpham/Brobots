@@ -35,13 +35,14 @@ Adafruit_SSD1306 display(OLED_RESET);
 // PWM limits, right and left value, and correction value
 int correction;
 int minPWM = 0;
-int maxPWM = 400;
+int maxPWM = 500;
 int PWMleft = (maxPWM - minPWM)/2;
 int PWMright = (maxPWM - minPWM)/2;
+int splits = 0;
 
 // PID gains, tuning pot, increment, and error variables
-float Kp = 65.0;
-float Kd = 65.0;
+float Kp = 85.0; //70
+float Kd = 130.0; //129
 float inc = 1;
 int potVal, oldPot;
 int error, lastError, deltaError = 0;
@@ -51,8 +52,9 @@ int lastSwitch = millis();
 int tPrev, tCurrent;
 
 // Bools for split handling
-bool stayLeft = false;
+bool stayLeft = true;
 bool splitting = false;
+int lastSplit = millis();
 
 // Bools for mode tracking/changing
 bool tuneKp = false;
@@ -60,11 +62,14 @@ bool tuneKd = false;
 bool freeSpins = false;
 bool moving = false;
 
-// Bools
+// Bools for QRD logic
 bool left = false;
 bool right = false;
+bool soLeft = false;
+bool soRight = false;
 
 // Function prototypes
+void update_PWMvalues(int max, int min);
 void change_mode(void);
 float calcDerivative(void);
 void updateError(void);
@@ -88,8 +93,8 @@ void setup() {
 
   // Startup display
   display.clearDisplay();
-  // display.setTextSize(1);
-  // display.setTextColor(WHITE);
+  display.setTextSize(1);
+  display.setTextColor(WHITE);
   display.setFont(&FreeMono9pt7b);
   display.setCursor(3,10);
   display.println("Edith");
@@ -164,36 +169,12 @@ void loop() {
     display.display();
 
   } else {
-    // If not moving, ramp up speed
-    if (!moving) {
-      for (int PWMval = 0; PWMval < PWMleft; PWMval++) {
-        pwm_start(motorR, 100000, 500, PWMval, 1);
-        pwm_start(motorL, 100000, 500, PWMval, 1);
-        delay(2);
-      }
-      moving = true;
-    }
-
     // Main PID sequence
     updateError();
 
     correction = Kp*error + Kd*calcDerivative(); // Correction tend to be + when right of tape
 
-    // Change motor PWM values
-    if (PWMleft-correction > minPWM && PWMleft-correction < maxPWM) {
-      PWMleft -= correction;
-    } else if (PWMleft-correction < minPWM) {
-      PWMleft = minPWM;
-    } else if (PWMleft-correction > maxPWM) {
-      PWMleft = maxPWM;
-    }
-    if (PWMright+correction > minPWM && PWMright+correction < maxPWM) {
-      PWMright += correction;
-    } else if (PWMright+correction < minPWM) {
-      PWMright = minPWM;
-    } else if (PWMright+correction > maxPWM) {
-      PWMright = maxPWM;
-    }
+    update_PWMvalues(maxPWM, minPWM);
 
     pwm_start(motorR, 100000, 500, PWMright, 1);
     pwm_start(motorL, 100000, 500, PWMleft, 1);
@@ -210,6 +191,8 @@ void updateError(void) {
       // Centered
       left = false;
       right = false;
+      soLeft = false;
+      soRight = false;
       error = 0;
       Serial.println("Centered");
 
@@ -217,107 +200,169 @@ void updateError(void) {
       // Misaligned leftish
       left = true;
       right = false;
+      soLeft = false;
+      soRight = false;
       error = -1;
       Serial.println("leftish");
-      
+
     } else if (!digitalRead(leftestQRD) && digitalRead(leftQRD) && !digitalRead(rightQRD) && !digitalRead(rightestQRD)) {
       // Misaligned rightish
       right = true;
       left = false;
+      soLeft = false;
+      soRight = false;
       error = 1;
       Serial.println("rightish");
-      
-    } else if (!digitalRead(leftestQRD) && !digitalRead(leftQRD) && digitalRead(rightQRD) && digitalRead(rightestQRD)) {
+
+    } else if (!digitalRead(leftestQRD) && !digitalRead(leftQRD) && !digitalRead(rightQRD) && digitalRead(rightestQRD)){
+      // Misaligned quite left
+      left = false;
+      right = false;
+      soLeft = true;
+      soRight = false;
+      error = -5;
+      Serial.println("quite left");
+
+    } else if (digitalRead(leftestQRD) && !digitalRead(leftQRD) && !digitalRead(rightQRD) && !digitalRead(rightestQRD)) {
+      // Misaligned quite right
+      right = false;
+      left = false;
+      soLeft = false;
+      soRight = true;
+      error = 5;
+      Serial.println("quite right");
+
+    } else if (left) {
       // Misaligned left
       left = true;
       right = false;
       error = -3;
       Serial.println("left");
 
-    } else if (digitalRead(leftestQRD) && digitalRead(leftQRD) && !digitalRead(rightQRD)&& !digitalRead(rightestQRD)) {
+    } else if (right) {
       // Misaligned right
       right = true;
       left = false;
       error = 3;
       Serial.println("right");
-
-    } else if (!digitalRead(leftestQRD) && !digitalRead(leftQRD) && !digitalRead(rightQRD) && digitalRead(rightestQRD)){
-      // Misaligned quite left
-      left = true;
-      right = false;
-      error = -5;
-      Serial.println("quite left");
-
-    } else if (digitalRead(leftestQRD) && !digitalRead(leftQRD) && !digitalRead(rightQRD) && !digitalRead(rightestQRD)) {
-      // Misaligned quite right
-      right = true;
-      left = false;
-      error = 5;
-      Serial.println("quite right");
-
-    } else if (left) {
+    
+    } else if (soLeft) {
       // Very misaligned left
       error = -8;
       Serial.println("V left");
-      
-    } else if (right) {
+
+    } else if (soRight) {
       // Very misaligned right
       error = 8;
       Serial.println("V right");
 
     }
 
-    // Split conditions
+    // // Split conditions
     if (digitalRead(leftestQRD) && digitalRead(leftQRD) && digitalRead(rightQRD) && digitalRead(rightestQRD)) {
       // If staying left, right. If staying right, left
-      error = stayLeft ? 5 : -5;
-      left = !stayLeft;
-      right = stayLeft;
-      splitting = true;
+      error = stayLeft ? 11 : -11;
+      soLeft = !stayLeft;
+      soRight = stayLeft;
+      left = false;
+      right = false;
+
+      if (millis() - lastSplit > 100) {
+        splits++;
+        lastSplit = millis();
+      }
+
     }
     if (digitalRead(leftestQRD) && digitalRead(leftQRD) && digitalRead(rightQRD) && !digitalRead(rightestQRD)) {
         //bool?true:false
       // If staying left, either right or quite right. If staying right, either centered or leftish
-      error = stayLeft ? 6 : -2;
-      left = !stayLeft;
-      right = stayLeft;
-      splitting = true;
+      error = stayLeft ? 9 : -7;
+      soLeft = !stayLeft;
+      soRight = stayLeft;
+      left = false;
+      right = false;
+
+      if (millis() - lastSplit > 100) {
+        splits++;
+        lastSplit = millis();
+      }
+
     } else if (!digitalRead(leftestQRD) && digitalRead(leftQRD) && digitalRead(rightQRD) && digitalRead(rightestQRD)) {
-      // If staying left, either centered of rightish. If staying right, either left or quite left
-      error = stayLeft ? 2 : -6;
-      left = !stayLeft;
-      right = stayLeft;
-      splitting = true;
+      // If staying left, either centered or rightish. If staying right, either left or quite left
+      error = stayLeft ? 7 : -9;
+      soLeft = !stayLeft;
+      soRight = stayLeft;
+      left = false;
+      right = false;
+
+      if (millis() - lastSplit > 100) {
+        splits++;
+        lastSplit = millis();
+      }
+
     } else if (digitalRead(leftestQRD) && !digitalRead(leftQRD) && digitalRead(rightQRD) && !digitalRead(rightestQRD)) {
       // If staying left, quite right. If staying right, leftish
-      error = stayLeft ? 7 : -2;
-      left = !stayLeft;
-      right = stayLeft;
-      splitting = true;
+      error = stayLeft ? 10 : -7;
+      soLeft = !stayLeft;
+      soRight = stayLeft;
+      left = false;
+      right = false;
+
+      if (millis() - lastSplit > 100) {
+        splits++;
+        lastSplit = millis();
+      }
+
     } else if (!digitalRead(leftestQRD) && digitalRead(leftQRD) && !digitalRead(rightQRD) && digitalRead(rightestQRD)) {
       // If staying left, rightish. If staying right, quite left
-      error = stayLeft ? 2 : -7;
-      left = !stayLeft;
-      right = stayLeft;
-      splitting = true;
+      error = stayLeft ? 7 : -10;
+      soLeft = !stayLeft;
+      soRight = stayLeft;
+      left = false;
+      right = false;
+
+      if (millis() - lastSplit > 100) {
+        splits++;
+        lastSplit = millis();
+      }
+
     } else if (digitalRead(leftestQRD) && !digitalRead(leftQRD) && digitalRead(rightQRD) && digitalRead(rightestQRD)) {
       // If staying left, quite right. If staying right, left
-      error = stayLeft ? 7 : -5;
-      left = !stayLeft;
-      right = stayLeft;
-      splitting = true;
+      error = stayLeft ? 14 : -11;
+      soLeft = !stayLeft;
+      soRight = stayLeft;
+      left = false;
+      right = false;
+
+      if (millis() - lastSplit > 100) {
+        splits++;
+        lastSplit = millis();
+      }
+
     } else if (digitalRead(leftestQRD) && digitalRead(leftQRD) && !digitalRead(rightQRD) && digitalRead(rightestQRD)) {
       // If staying left, right. If staying right, quite left
-      error = stayLeft ? 5 : -7;
-      left = !stayLeft;
-      right = stayLeft;
-      splitting = true;
+      error = stayLeft ? 11 : -14;
+      soLeft = !stayLeft;
+      soRight = stayLeft;
+      left = false;
+      right = false;
+
+      if (millis() - lastSplit > 100) {
+        splits++;
+        lastSplit = millis();
+      }
+
     } else if (digitalRead(leftestQRD) && !digitalRead(leftQRD) && !digitalRead(rightQRD) && digitalRead(rightestQRD)) {
       // If staying left, quite right. If staying right, quite left
-      error = stayLeft ? 7 : -7;
-      left = !stayLeft;
-      right = stayLeft;
-      splitting = true;
+      error = stayLeft ? 15 : -15;
+      soLeft = !stayLeft;
+      soRight = stayLeft;
+
+      if (millis() - lastSplit > 100) {
+        splits++;
+        lastSplit = millis();
+      }
+
     }
 
     // Serial.println(error);
@@ -334,6 +379,13 @@ void updateError(void) {
     // Serial.println("Leftest");
     // Serial.println(digitalRead(leftestQRD));
     // delay(1000);
+  
+    if (splits >= 3) {
+      pwm_stop(motorL);
+      pwm_stop(motorR);
+      tuneKp = true;
+      splits = 0;
+    }
 
 }
 
@@ -390,6 +442,24 @@ void change_mode(void) {
       display.display();
     }
   }
+}
+
+void update_PWMvalues(int max, int min) {
+  // Change motor PWM values
+    if (PWMleft-correction > min && PWMleft-correction < max) {
+      PWMleft -= correction;
+    } else if (PWMleft-correction < min) {
+      PWMleft = min;
+    } else if (PWMleft-correction > max) {
+      PWMleft = max;
+    }
+    if (PWMright+correction > min && PWMright+correction < max) {
+      PWMright += correction;
+    } else if (PWMright+correction < min) {
+      PWMright = min;
+    } else if (PWMright+correction > max) {
+      PWMright = max;
+    }
 }
 
 // Function for aqcuiring a stone from a pillar
