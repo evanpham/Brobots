@@ -120,6 +120,8 @@ void setup() {
   pinMode(rightestQRD, INPUT_PULLUP);
   pinMode(rightSplitQRD, INPUT_PULLUP);
   pinMode(leftSplitQRD, INPUT_PULLUP);
+  pinMode(motorLrev, INPUT_PULLDOWN);
+  pinMode(motorRrev, INPUT_PULLDOWN);
   // attachInterrupt(digitalPinToInterrupt(button), change_mode, LOW);
 
 }
@@ -188,6 +190,8 @@ void loop() {
     updatePWMvalue(maxPWM, minPWM, true);
     updatePWMvalue(maxPWM, minPWM, false);
    
+    digitalWrite(motorRrev, 0);
+    digitalWrite(motorLrev, 0);
     pwm_start(motorR, 100000, 500, PWMright, 1);
     pwm_start(motorL, 100000, 500, PWMleft, 1);
     // Serial.println(correction);
@@ -277,54 +281,11 @@ void updateError(void) {
     }
 
     // // Split conditions
-    // if (digitalRead(leftestQRD) && digitalRead(leftQRD) && digitalRead(rightQRD) && digitalRead(rightestQRD)) {
-    //   // If staying left, right. If staying right, left
-    //   error = stayLeft ? 11 : -11;
-    //   splitProcedure();
-
-    // }
-    // if (digitalRead(leftestQRD) && digitalRead(leftQRD) && digitalRead(rightQRD) && !digitalRead(rightestQRD)) {
-    //     //bool?true:false
-    //   // If staying left, either right or quite right. If staying right, either centered or leftish
-    //   error = stayLeft ? 9 : -7;
-    //   splitProcedure();
-
-    // } else if (!digitalRead(leftestQRD) && digitalRead(leftQRD) && digitalRead(rightQRD) && digitalRead(rightestQRD)) {
-    //   // If staying left, either centered or rightish. If staying right, either left or quite left
-    //   error = stayLeft ? 7 : -9;
-    //   splitProcedure();
-
-    // } else if (digitalRead(leftestQRD) && !digitalRead(leftQRD) && digitalRead(rightQRD) && !digitalRead(rightestQRD)) {
-    //   // If staying left, quite right. If staying right, leftish
-    //   error = stayLeft ? 10 : -7;
-    //   splitProcedure();
-
-    // } else if (!digitalRead(leftestQRD) && digitalRead(leftQRD) && !digitalRead(rightQRD) && digitalRead(rightestQRD)) {
-    //   // If staying left, rightish. If staying right, quite left
-    //   error = stayLeft ? 7 : -10;
-    //   splitProcedure();
-
-    // } else if (digitalRead(leftestQRD) && !digitalRead(leftQRD) && digitalRead(rightQRD) && digitalRead(rightestQRD)) {
-    //   // If staying left, quite right. If staying right, left
-    //   error = stayLeft ? 14 : -11;
-    //   splitProcedure();
-
-    // } else if (digitalRead(leftestQRD) && digitalRead(leftQRD) && !digitalRead(rightQRD) && digitalRead(rightestQRD)) {
-    //   // If staying left, right. If staying right, quite left
-    //   error = stayLeft ? 11 : -14;
-    //   splitProcedure();
-
-    // } else if (digitalRead(leftestQRD) && !digitalRead(leftQRD) && !digitalRead(rightQRD) && digitalRead(rightestQRD)) {
-    //   // If staying left, quite right. If staying right, quite left
-    //   error = stayLeft ? 15 : -15;
-    //   splitProcedure();
-
-    // } else 
-    if (digitalRead(leftSplitQRD) && stayLeft && (digitalRead(leftestQRD) || digitalRead(leftQRD) || digitalRead(rightQRD) || digitalRead(rightestQRD))) {
+    if (digitalRead(leftSplitQRD) && stayLeft) {
       // If the left split QRD is triggered and we want to stay left, hardcut left
       splitProcedure();
 
-    } else if (digitalRead(rightSplitQRD) && !stayLeft && (digitalRead(leftestQRD) || digitalRead(leftQRD) || digitalRead(rightQRD) || digitalRead(rightestQRD))) {
+    } else if (digitalRead(rightSplitQRD) && !stayLeft) {
       // If the right split QRD is triggered and we want to stay right, hardcut right
       splitProcedure();
 
@@ -345,14 +306,6 @@ void updateError(void) {
     // Serial.println("Left split");
     // Serial.println(digitalRead(leftSplitQRD));
     // delay(1000);
-  
-    if (splits >= 3) {
-      pwm_stop(motorL);
-      pwm_stop(motorR);
-      tuneKp = true;
-      splits = 0;
-    }
-
 }
 
 float calcDerivative(void) {
@@ -379,6 +332,11 @@ float calcDerivative(void) {
 // freeSpins mode changes QRD threshold with potentiometer
 // Default mode (all others false) tries to follow tape
 void change_mode(void) {
+  pwm_stop(motorL);
+  pwm_stop(motorR);
+  pwm_stop(motorLrev);
+  pwm_stop(motorRrev);
+
   // Mark moving boolean as false to trigger ramp up when motion is resumed
   moving = false;
   delay(100);
@@ -435,23 +393,36 @@ void updatePWMvalue(int max, int min, bool leftMotor) {
 // Procedure which is run in every splitting state
 void splitProcedure(void) {
   Serial.println("SPLITTING");
+  Serial.println(splits);
   // Set state booleans accordingly
   left = !stayLeft;
   right = stayLeft;
 
+  splitting = true;
+  splits++;
   // If this is a new split, change splitting boolean, count split, and update lastSplit timestamp
-  if (millis() - lastSplit > 100) {
-    splitting = true;
-    splits++;
-    lastSplit = millis();
+  // if (millis() - lastSplit > 100) {
+  //   splitting = true;
+  //   splits++;
+  //   lastSplit = millis();
+  // }
+
+  if (splits >= 3) {
+    pwm_stop(motorL);
+    pwm_stop(motorR);
+    pwm_stop(motorRrev);
+    pwm_stop(motorLrev);
+    splits = 0;
+    tuneKp = true;
   }
   
   // Turn in direction of desired split path until the QRD's sense tape
   if (stayLeft) {
-    pwm_start(motorL, 100000, 500, 0, 1);
+    pwm_stop(motorL);
+    pwm_stop(motorRrev);
     pwm_start(motorR, 100000, 500, 150, 1);
-    pwm_start(motorLrev, 100000, 500, 150, 1);
-    delay(50);
+    pwm_start(motorLrev, 100000, 500, 250, 1);
+    delay(70);
 
     while (!(digitalRead(leftestQRD) || digitalRead(leftQRD) || digitalRead(rightQRD) || digitalRead(rightestQRD))) {
       delay(10);
@@ -484,5 +455,9 @@ void noSplitProcedure(void) {
 // Motion must include outward motion to pillar, upward motion to stone, claw closure,
 // deposition maneuvering, and claw openning, and return to default position
 void getStone(Arm a) {
+
+}
+
+void resetMotors() {
 
 }
