@@ -40,14 +40,14 @@ Adafruit_SSD1306 display(OLED_RESET);
 // PWM limits, right and left value, and correction value
 int correction;
 int minPWM = 0;
-int maxPWM = 450;
+int maxPWM = 500;
 int PWMleft = (maxPWM - minPWM)/2;
 int PWMright = (maxPWM - minPWM)/2;
 int splits = 0;
 
 // PID gains, tuning pot, increment, and error variables
-float Kp = 85.0;
-float Kd = 135.0;
+float Kp = 70.0;
+float Kd = 140.0;
 float inc = 1;
 int potVal, oldPot;
 int error, lastError, deltaError = 0;
@@ -69,11 +69,10 @@ bool moving = false;
 
 // Bools for QRD logic
 bool left = false;
-bool center = false;
 bool right = false;
 
 // Function prototypes
-void updatePWMvalue(int max, int min, bool leftMotor);
+void updatePWMvalue(int max, int min);
 void splitProcedure(void);
 void noSplitProcedure(void);
 void change_mode(void);
@@ -122,8 +121,8 @@ void setup() {
   pinMode(leftSplitQRD, INPUT_PULLUP);
   pinMode(motorLrev, INPUT_PULLDOWN);
   pinMode(motorRrev, INPUT_PULLDOWN);
-  // attachInterrupt(digitalPinToInterrupt(button), change_mode, LOW);
-
+  pinMode(motorL, INPUT_PULLDOWN);
+  pinMode(motorR, INPUT_PULLDOWN);
 }
 
 void loop() {
@@ -156,6 +155,8 @@ void loop() {
     // Tune Kd mode (Turn motors off)
     pwm_stop(motorL);
     pwm_stop(motorR);
+    pwm_stop(motorLrev);
+    pwm_stop(motorRrev);
 
     oldPot = potVal;
     potVal = analogRead(pot);
@@ -174,6 +175,8 @@ void loop() {
     // Free potentiometer spins (Turn motors off)
     pwm_stop(motorL);
     pwm_stop(motorR);
+    pwm_stop(motorLrev);
+    pwm_stop(motorRrev);
 
     display.clearDisplay();
     display.setCursor(4,40);
@@ -186,9 +189,8 @@ void loop() {
 
     correction = Kp*error + Kd*calcDerivative(); // Correction tend to be + when right of tape
 
-    // Update PWM values for left and right motor
-    updatePWMvalue(maxPWM, minPWM, true);
-    updatePWMvalue(maxPWM, minPWM, false);
+    // Update PWM values
+    updatePWMvalue(maxPWM, minPWM);
    
     digitalWrite(motorRrev, 0);
     digitalWrite(motorLrev, 0);
@@ -332,17 +334,16 @@ float calcDerivative(void) {
 // freeSpins mode changes QRD threshold with potentiometer
 // Default mode (all others false) tries to follow tape
 void change_mode(void) {
-  pwm_stop(motorL);
-  pwm_stop(motorR);
-  pwm_stop(motorLrev);
-  pwm_stop(motorRrev);
+  Serial.println("CHANGING");
 
   // Mark moving boolean as false to trigger ramp up when motion is resumed
   moving = false;
   delay(100);
 
   // Continue if button still pressed after delay (helps combat noise)
-  if (!digitalRead(button)) {
+  // Also continue if change was triggered by split
+  if (!digitalRead(button) || splitting) {
+    Serial.println("RLY CHANGING");
     // move to next mode
     if (!tuneKp && !tuneKd && !freeSpins) {
       tuneKp = true;
@@ -368,75 +369,68 @@ void change_mode(void) {
   }
 }
 
-void updatePWMvalue(int max, int min, bool leftMotor) {
+void updatePWMvalue(int max, int min) {
   // Change motor PWM values of either left or right wheel
-  if (leftMotor) {
-    if (PWMleft-correction > min && PWMleft-correction < max) {
-      PWMleft -= correction;
-    } else if (PWMleft-correction < min) {
-      PWMleft = min;
-    } else if (PWMleft-correction > max) {
-      PWMleft = max;
-    }
-  } else {
-    if (PWMright+correction > min && PWMright+correction < max) {
-      PWMright += correction;
-    } else if (PWMright+correction < min) {
-      PWMright = min;
-    } else if (PWMright+correction > max) {
-      PWMright = max;
-    }
+  if (PWMleft-correction > min && PWMleft-correction < max) {
+    PWMleft -= correction;
+  } else if (PWMleft-correction < min) {
+    PWMleft = min;
+  } else if (PWMleft-correction > max) {
+    PWMleft = max;
   }
 
+  if (PWMright+correction > min && PWMright+correction < max) {
+    PWMright += correction;
+  } else if (PWMright+correction < min) {
+    PWMright = min;
+  } else if (PWMright+correction > max) {
+    PWMright = max;
+  }
 }
+
 
 // Procedure which is run in every splitting state
 void splitProcedure(void) {
-  Serial.println("SPLITTING");
-  Serial.println(splits);
   // Set state booleans accordingly
   left = !stayLeft;
   right = stayLeft;
 
-  splitting = true;
-  splits++;
-  // If this is a new split, change splitting boolean, count split, and update lastSplit timestamp
-  // if (millis() - lastSplit > 100) {
-  //   splitting = true;
-  //   splits++;
-  //   lastSplit = millis();
-  // }
+  if (millis() - lastSplit > 500) {
+    splitting = true;
+    splits++;
+    lastSplit = millis();
+  }
 
-  if (splits >= 3) {
-    pwm_stop(motorL);
-    pwm_stop(motorR);
-    pwm_stop(motorRrev);
-    pwm_stop(motorLrev);
+  if (splits >= 4) {
     splits = 0;
     tuneKp = true;
+    return;
   }
   
   // Turn in direction of desired split path until the QRD's sense tape
   if (stayLeft) {
     pwm_stop(motorL);
     pwm_stop(motorRrev);
-    pwm_start(motorR, 100000, 500, 150, 1);
+    pwm_start(motorR, 100000, 500, 250, 1);
     pwm_start(motorLrev, 100000, 500, 250, 1);
-    delay(70);
-
-    while (!(digitalRead(leftestQRD) || digitalRead(leftQRD) || digitalRead(rightQRD) || digitalRead(rightestQRD))) {
-      delay(10);
-    }
-    pwm_stop(motorLrev);
-    pwm_start(motorL, 100000, 500, 200, 1);
-    pwm_start(motorR, 100000, 500, 200, 1);
-    error = 0;
-
+    delay(250);
   } else {
-    pwm_start(motorL, 100000, 500, 500, 1);
-    pwm_start(motorR, 100000, 500, 0, 1);
-    delay(50);
+    pwm_stop(motorR);
+    pwm_stop(motorLrev);
+    pwm_start(motorL, 100000, 500, 250, 1);
+    pwm_start(motorRrev, 100000, 500, 250, 1);
+    delay(250);
   }
+  while (!(digitalRead(leftestQRD) || digitalRead(leftQRD) || digitalRead(rightQRD) || digitalRead(rightestQRD))) {
+    delay(10);
+  }
+
+  // Continue forward once tape is found
+  pwm_stop(motorLrev);
+  pwm_stop(motorRrev);
+  pwm_start(motorL, 100000, 500, 100, 1);
+  pwm_start(motorR, 100000, 500, 100, 1);
+  error = 0;
 }
 
 // Procedure which is run in every non splitting state
@@ -455,9 +449,5 @@ void noSplitProcedure(void) {
 // Motion must include outward motion to pillar, upward motion to stone, claw closure,
 // deposition maneuvering, and claw openning, and return to default position
 void getStone(Arm a) {
-
-}
-
-void resetMotors() {
 
 }
