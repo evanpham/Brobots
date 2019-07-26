@@ -36,6 +36,7 @@ Adafruit_SSD1306 display(OLED_RESET);
 #define armUp PA_3
 #define armDown PA_2
 #define splitLED PA1
+#define armPin PA10
 
 // PWM limits, offRight and offLeft value, and correction value
 int correction;
@@ -43,11 +44,11 @@ int minPWM = 0;
 int maxPWM = 500;
 int PWMleft = (maxPWM - minPWM)/2;
 int PWMright = (maxPWM - minPWM)/2;
-int splits = 0;
+int revSpeed = 40;
 
 // PID gains, tuning pot, increment,  alignment and error variables
-float Kp = 80.0;
-float Kd = 140.0;
+float Kp = 90.0;
+float Kd = 150.0;
 float inc = 1;
 int potVal, oldPot;
 int error, lastError, deltaError = 0;
@@ -61,6 +62,7 @@ int tPrev, tCurrent;
 bool stayLeft = true;
 bool splitting = false;
 int lastSplit = millis();
+int splits = 0;
 
 // Bools for mode tracking/changing
 bool tuneKp = false;
@@ -80,6 +82,7 @@ void change_mode(void);
 float calcDerivative(void);
 void updateQRDs(void);
 void updateError(void);
+void updateMotors(int leftVal, int rightVal);
 int readSonar(void);
 void getStone(Arm a);
 
@@ -135,10 +138,10 @@ void loop() {
 
   if (tuneKp) {
     // Tune Kp mode (Turn off motors)
-    pwm_stop(motorL);
-    pwm_stop(motorR);
-    pwm_stop(motorLrev);
-    pwm_stop(motorRrev);
+    pwm_start(motorR, 100000, 500, 0, 1);
+    pwm_start(motorL, 100000, 500, 0, 1);
+    pwm_start(motorRrev, 100000, 500, 0, 1);
+    pwm_start(motorLrev, 100000, 500, 0, 1);
 
     oldPot = potVal;
     potVal = analogRead(pot);
@@ -155,10 +158,10 @@ void loop() {
 
   } else if (tuneKd) {
     // Tune Kd mode (Turn motors off)
-    pwm_stop(motorL);
-    pwm_stop(motorR);
-    pwm_stop(motorLrev);
-    pwm_stop(motorRrev);
+    pwm_start(motorR, 100000, 500, 0, 1);
+    pwm_start(motorL, 100000, 500, 0, 1);
+    pwm_start(motorRrev, 100000, 500, 0, 1);
+    pwm_start(motorLrev, 100000, 500, 0, 1);
 
     oldPot = potVal;
     potVal = analogRead(pot);
@@ -175,10 +178,10 @@ void loop() {
 
   } else if (freeSpins) {
     // Free potentiometer spins (Turn motors off)
-    pwm_stop(motorL);
-    pwm_stop(motorR);
-    pwm_stop(motorLrev);
-    pwm_stop(motorRrev);
+    pwm_start(motorR, 100000, 500, 0, 1);
+    pwm_start(motorL, 100000, 500, 0, 1);
+    pwm_start(motorRrev, 100000, 500, 0, 1);
+    pwm_start(motorLrev, 100000, 500, 0, 1);
 
     display.clearDisplay();
     display.setCursor(4,40);
@@ -194,10 +197,9 @@ void loop() {
     // Update PWM values
     updatePWMvalue(maxPWM, minPWM);
    
-    digitalWrite(motorRrev, 0);
-    digitalWrite(motorLrev, 0);
-    pwm_start(motorR, 100000, 500, PWMright, 1);
-    pwm_start(motorL, 100000, 500, PWMleft, 1);
+    // Updates motors with new PWM values
+    updateMotors(PWMleft, PWMright);
+    
     // Serial.println(correction);
     // Serial.println(PWMleft);
     // Serial.println(PWMright);
@@ -311,19 +313,7 @@ void updateError(void) {
 
   }
 
-  // Serial.println("Right split");
-  // Serial.println(rightSplit);
-  // Serial.println("Rightest");
-  // Serial.println(rightest);
-  // Serial.println("Right");
-  // Serial.println(right);
-  // Serial.println("Left");
-  // Serial.println(left);
-  // Serial.println("Leftest");
-  // Serial.println(leftest);
-  // Serial.println("Left split");
-  // Serial.println(leftSplit);
-  // delay(1000);
+ 
 }
 
 float calcDerivative(void) {
@@ -403,6 +393,24 @@ void updatePWMvalue(int max, int min) {
   }
 }
 
+void updateMotors(int leftVal, int rightVal) {
+  if (leftVal != 0 && rightVal != 0) {
+    pwm_start(motorRrev, 100000, 500, 0, 1);
+    pwm_start(motorLrev, 100000, 500, 0, 1);
+    pwm_start(motorR, 100000, 500, rightVal, 1);
+    pwm_start(motorL, 100000, 500, leftVal, 1);
+  } else if (leftVal == 0) {
+    pwm_start(motorRrev, 100000, 500, 0, 1);
+    pwm_start(motorL, 100000, 500, 0, 1);
+    pwm_start(motorR, 100000, 500, rightVal, 1);
+    pwm_start(motorLrev, 100000, 500, revSpeed, 1);
+  } else if (rightVal == 0) {
+    pwm_start(motorR, 100000, 500, 0, 1);
+    pwm_start(motorLrev, 100000, 500, 0, 1);
+    pwm_start(motorRrev, 100000, 500, revSpeed, 1);
+    pwm_start(motorL, 100000, 500, leftVal, 1);
+  }
+}
 
 // Procedure which is run in every splitting state
 void splitProcedure(void) {
@@ -411,7 +419,7 @@ void splitProcedure(void) {
   offRight = stayLeft;
 
   // Ensure this is not the same as last split (prevents double counting a split)
-  if (millis() - lastSplit > 500) {
+  if (millis() - lastSplit > 350) {
     splitting = true;
     splits++;
     lastSplit = millis();
@@ -419,21 +427,27 @@ void splitProcedure(void) {
 
   // Stop if at desired split number
   if (splits >= 4) {
+    pwm_start(motorL, 100000, 500, 0, 1);
+    pwm_start(motorR, 100000, 500, 0, 1);
+    pwm_start(motorLrev, 100000, 500, PWMleft, 1);
+    pwm_start(motorRrev, 100000, 500, PWMright, 1);
+    delay(100);
+
     splits = 0;
-    change_mode();
+    tuneKp = true;
     return;
   }
   
   // Turn in direction of desired split path until the QRD's sense tape
   if (stayLeft && splits < 3) {
-    pwm_stop(motorL);
-    pwm_stop(motorRrev);
+    pwm_start(motorL, 100000, 500, 0, 1);
+    pwm_start(motorRrev, 100000, 500, 0, 1);
     pwm_start(motorR, 100000, 500, 250, 1);
     pwm_start(motorLrev, 100000, 500, 250, 1);
     delay(250);
   } else if (splits < 3) {
-    pwm_stop(motorR);
-    pwm_stop(motorLrev);
+    pwm_start(motorR, 100000, 500, 0, 1);
+    pwm_start(motorLrev, 100000, 500, 0, 1);
     pwm_start(motorL, 100000, 500, 250, 1);
     pwm_start(motorRrev, 100000, 500, 250, 1);
     delay(250);
