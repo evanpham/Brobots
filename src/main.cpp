@@ -35,7 +35,7 @@ Adafruit_SSD1306 display(OLED_RESET);
 #define armIn PA_7
 #define armUp PA_3
 #define armDown PA_2
-#define splitLED PA1
+#define LED PB13
 #define armPin PA10
 
 // PWM limits, offRight and offLeft value, and correction value
@@ -48,7 +48,7 @@ int revSpeed = 40;
 
 // PID gains, tuning pot, increment,  alignment and error variables
 float Kp = 90.0;
-float Kd = 150.0;
+float Kd = 155.0;
 float inc = 1;
 int potVal, oldPot;
 int error, lastError, deltaError = 0;
@@ -155,6 +155,12 @@ void loop() {
     display.print("Kp: ");
     display.print(Kp);
     display.display();
+
+    // if (digitalRead(rightQRD)) {
+    //   digitalWrite(LED, HIGH);
+    // } else {
+    //   digitalWrite(LED, LOW);
+    // }
 
   } else if (tuneKd) {
     // Tune Kd mode (Turn motors off)
@@ -299,7 +305,7 @@ void updateError(void) {
     error = 8;
     Serial.println("v right");
     splitting = false;
-    
+
   }
 
   // Split conditions
@@ -312,7 +318,19 @@ void updateError(void) {
     splitProcedure();
 
   }
-
+  // Serial.println("Right split");
+  // Serial.println(rightSplit);
+  // Serial.println("Rightest");
+  // Serial.println(rightest);
+  // Serial.println("Right");
+  // Serial.println(right);
+  // Serial.println("Left");
+  // Serial.println(left);
+  // Serial.println("Leftest");
+  // Serial.println(leftest);
+  // Serial.println("Left split");
+  // Serial.println(leftSplit);
+  // delay(1000);
  
 }
 
@@ -426,14 +444,19 @@ void splitProcedure(void) {
   }
 
   // Stop if at desired split number
-  if (splits >= 4) {
+  if (splits >= 3) {
+    delay(100);
     pwm_start(motorL, 100000, 500, 0, 1);
     pwm_start(motorR, 100000, 500, 0, 1);
-    pwm_start(motorLrev, 100000, 500, PWMleft, 1);
-    pwm_start(motorRrev, 100000, 500, PWMright, 1);
-    delay(100);
+    pwm_start(motorLrev, 100000, 500, 500, 1);
+    pwm_start(motorRrev, 100000, 500, 500, 1);
+    delay(150);
 
     splits = 0;
+
+
+
+
     tuneKp = true;
     return;
   }
