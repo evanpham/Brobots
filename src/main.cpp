@@ -3,8 +3,7 @@
 #include <Adafruit_SSD1306.h>
 #include <FreeMono9pt7b.h>
 #include <time.h>
-#include "Sonar.h"
-#include "Arm.h"
+#include <Servo.h>
 
 // #if (SSD1306_LCDHEIGHT != 64)
 // #error("Height incorrect, please fix Adafruit_SSD1306.h!");
@@ -14,7 +13,10 @@
 Adafruit_SSD1306 display(OLED_RESET);
 
 #define pot PA5
+#define thanos PB12
 #define button PA12
+#define deposition PB_8
+#define slideServo PB_9
 #define motorL PB_0
 #define motorR PA_0
 #define motorLrev PB_1
@@ -25,19 +27,12 @@ Adafruit_SSD1306 display(OLED_RESET);
 #define rightestQRD PA3
 #define leftSplitQRD PA15
 #define rightSplitQRD PB4
-#define upEcho PB12
-#define upTrig PB13
-#define outEcho PB14
-#define outTrig PB15
-#define baseServo PB_4
-#define clawServo PA_5
-#define armOut PA_6
-#define armIn PA_7
-#define armUp PA_3
-#define armDown PA_2
-#define splitLED PA1
-#define armPin PA10
 #define LED PB13
+#define atStone PB14
+#define stoned PB15
+#define collision PA8
+#define bumperL PA7
+#define bumperR PA6
 
 // PWM limits, offRight and offLeft value, and correction value
 int correction;
@@ -45,7 +40,8 @@ int minPWM = 0;
 int maxPWM = 500;
 int PWMleft = (maxPWM - minPWM)/2;
 int PWMright = (maxPWM - minPWM)/2;
-int revSpeed = 40;
+int revSpeed = 35;
+bool initialized = false; // motors not initialized
 
 // PID gains, tuning pot, increment,  alignment and error variables
 float Kp = 90.0;
@@ -60,13 +56,14 @@ int lastSwitch = millis();
 int tPrev, tCurrent;
 
 // Variables for split handling and return marking/timing
-bool stayLeft = true;
+bool stayLeft;
 bool splitting = false;
 int lastSplit = millis();
 int splits = 0;
 int splitGoal = 3;
 bool returning = false;
 int ETtime = 90000; // Time in milliseconds at which we need to start returning
+int brakingTime = 150;
 
 // Bools for mode tracking/changing
 bool tuneKp = false;
@@ -76,11 +73,13 @@ bool freeSpins = false;
 // Bools for QRD logic (remembers how the bot was most recently aligned)
 bool offLeft = false;
 bool offRight = false;
+Servo slider;
+Servo depo;
 
 // Function prototypes
+void initMotors(void);
 void updatePWMvalue(int max, int min);
 void splitProcedure(void);
-void noSplitProcedure(void);
 void returnSplitProcedure(void);
 void gauntletProcedure(void);
 void change_mode(void);
@@ -90,24 +89,18 @@ void updateError(void);
 void updateMotors(int leftVal, int rightVal);
 void hardStop(void);
 int readSonar(void);
-void getStone(Arm a);
 void pivot(bool clockwise);
 void waitForTape(void);
-
-// Arm and Sonar initialization
-// out and up are sonars which measure distance out and up respectively
-// All other inputs are pin names corresponding to specific control pins
-// Ex. armUp is a pin which, when powered, moves the arm up
-Sonar up(upEcho, upTrig);
-Sonar out(outEcho, outTrig); 
-//Arm arm(baseServo, clawServo, armOut, armIn, armUp, armDown, out, up);
-
+void followSplit(bool leftPath, bool haveDelay);
+void keepGoing(void);
+void openServo(PinName servo);
+void closeServo(PinName servo);
+void bringItHomeBaby(void);
+void getStone(void);
 
 void setup() {
   Serial.begin(9600);
-
   display.begin(SSD1306_SWITCHCAPVCC, 0x3C);  // initialize with the I2C addr 0x3C (for the 128x64)
-  // init done
 
   // Startup display
   display.clearDisplay();
@@ -115,16 +108,15 @@ void setup() {
   display.setTextColor(WHITE);
   display.setFont(&FreeMono9pt7b);
   display.setCursor(3,10);
-  display.println("Edith");
+  display.println("MOLLIE");
   display.println("Booting");
   display.println("Up...");
   display.display();
   delay(1000);
   display.clearDisplay();
   display.setCursor(20,40);
-  display.println("ZOOM!");
-  display.display();
 
+  // Pin setup
   pinMode(button, INPUT_PULLUP);
   pinMode(leftQRD, INPUT_PULLUP);
   pinMode(rightQRD, INPUT_PULLUP);
@@ -132,10 +124,17 @@ void setup() {
   pinMode(rightestQRD, INPUT_PULLUP);
   pinMode(rightSplitQRD, INPUT_PULLUP);
   pinMode(leftSplitQRD, INPUT_PULLUP);
-  pinMode(motorLrev, INPUT_PULLDOWN);
-  pinMode(motorRrev, INPUT_PULLDOWN);
-  pinMode(motorL, INPUT_PULLDOWN);
-  pinMode(motorR, INPUT_PULLDOWN);
+  pinMode(thanos, INPUT_PULLDOWN);
+  stayLeft = digitalRead(thanos) ? true : false; // Stay left if thanos
+
+  if (stayLeft) {
+    display.println("THANOS ZOOM!");
+  } else {
+    display.println("METHANOS ZOOOOOOM!");
+  }
+  display.display();
+  initMotors();
+
 }
 
 void loop() {
@@ -143,13 +142,13 @@ void loop() {
   if (!digitalRead(button)) {
     change_mode();
   }
-
+  
   if (tuneKp) {
     // Tune Kp mode (Turn off motors)
-    pwm_start(motorR, 100000, 500, 0, 1);
-    pwm_start(motorL, 100000, 500, 0, 1);
-    pwm_start(motorRrev, 100000, 500, 0, 1);
-    pwm_start(motorLrev, 100000, 500, 0, 1);
+    pwm_start(motorR, 100000, 500, 0, 0);
+    pwm_start(motorL, 100000, 500, 0, 0);
+    pwm_start(motorRrev, 100000, 500, 0, 0);
+    pwm_start(motorLrev, 100000, 500, 0, 0);
 
     oldPot = potVal;
     potVal = analogRead(pot);
@@ -166,10 +165,10 @@ void loop() {
 
   } else if (tuneKd) {
     // Tune Kd mode (Turn motors off)
-    pwm_start(motorR, 100000, 500, 0, 1);
-    pwm_start(motorL, 100000, 500, 0, 1);
-    pwm_start(motorRrev, 100000, 500, 0, 1);
-    pwm_start(motorLrev, 100000, 500, 0, 1);
+    pwm_start(motorR, 100000, 500, 0, 0);
+    pwm_start(motorL, 100000, 500, 0, 0);
+    pwm_start(motorRrev, 100000, 500, 0, 0);
+    pwm_start(motorLrev, 100000, 500, 0, 0);
 
     oldPot = potVal;
     potVal = analogRead(pot);
@@ -186,21 +185,19 @@ void loop() {
 
   } else if (freeSpins) {
     // Free potentiometer spins (Turn motors off)
-    pwm_start(motorR, 100000, 500, 0, 1);
-    pwm_start(motorL, 100000, 500, 0, 1);
-    pwm_start(motorRrev, 100000, 500, 0, 1);
-    pwm_start(motorLrev, 100000, 500, 0, 1);
+    pwm_start(motorR, 100000, 500, 0, 0);
+    pwm_start(motorL, 100000, 500, 0, 0);
+    pwm_start(motorRrev, 100000, 500, 0, 0);
+    pwm_start(motorLrev, 100000, 500, 0, 0);
 
     display.clearDisplay();
     display.setCursor(4,40);
     display.print("FREE SPINS");
     display.display();
 
-  } else if (splits >= splitGoal || millis() >= ETtime) {
-    // If first time running this go home code, pivot
-    if (!returning) {
-      pivot(stayLeft); // Boolean parameter tells it to turn clockwise (true) or CCW (false)
-    }
+  } else if (((int) millis() >= ETtime) && !returning) {
+    // If we hit the time limit and we havent turned back yet, turn back
+    pivot(stayLeft);
     returning = true;
 
   } else {
@@ -214,8 +211,7 @@ void loop() {
    
     // Updates motors with new PWM values
     updateMotors(PWMleft, PWMright);
-    
-    // Serial.println(correction);
+
     // Serial.println(PWMleft);
     // Serial.println(PWMright);
     // delay(1000);
@@ -233,13 +229,27 @@ void updateQRDs(void) {
   rightSplit = digitalRead(rightSplitQRD);
 }
 
+void initMotors(void) {
+   // PWM initialization for motors and servos
+  Serial.println("INITIALIZING");
+  delay(500);
+  pwm_start(motorR, 100000, 500, 0, 1);
+  pwm_start(motorL, 100000, 500, 0, 1);
+  pwm_start(motorRrev, 100000, 500, 0, 1);
+  pwm_start(motorLrev, 100000, 500, 0, 1);
+  pwm_start(deposition, 100000, 2000, 50, 1);
+  pwm_start(slideServo, 100000, 2000, 140, 1);
+
+  Serial.println("INITIALIZED");
+}
+
 // Updates error value according to state of QRDs
 // Positive errors indicate offRight misalignment
 // Negative errors indicate offLeft misalignment
 void updateError(void) {
   // Main PID control sequence
   updateQRDs();
-
+  
   if (!leftest && left && right && !rightest) {
     // Centered
     offLeft = false;
@@ -316,7 +326,7 @@ void updateError(void) {
     splitting = false;
     
   }
-
+  
   // Split conditions
   if (leftSplit && stayLeft && !returning) {
     // If left split QRD is triggered and we want to stay left, run split procedure
@@ -334,6 +344,14 @@ void updateError(void) {
     // On return split handling
     returnSplitProcedure();
 
+  } else if (leftSplit && !stayLeft && returning && splits > 2) {
+    // On return split handling for pillar splits
+    returnSplitProcedure();
+
+  } else if (rightSplit && !stayLeft && returning && splits > 2) {
+    // On return split handling for pillar splits
+    returnSplitProcedure();
+
   }
 
   // Serial.println("Right Split");
@@ -349,6 +367,7 @@ void updateError(void) {
   // Serial.println("Left Split");
   // Serial.println(leftSplit);
   // delay(1000);
+  
 }
 
 float calcDerivative(void) {
@@ -426,20 +445,20 @@ void updatePWMvalue(int max, int min) {
 
 void updateMotors(int leftVal, int rightVal) {
   if (leftVal != 0 && rightVal != 0) {
-    pwm_start(motorRrev, 100000, 500, 0, 1);
-    pwm_start(motorLrev, 100000, 500, 0, 1);
-    pwm_start(motorR, 100000, 500, rightVal, 1);
-    pwm_start(motorL, 100000, 500, leftVal, 1);
+    pwm_start(motorRrev, 100000, 500, 0, 0);
+    pwm_start(motorLrev, 100000, 500, 0, 0);
+    pwm_start(motorR, 100000, 500, rightVal, 0);
+    pwm_start(motorL, 100000, 500, leftVal, 0);
   } else if (leftVal == 0) {
-    pwm_start(motorRrev, 100000, 500, 0, 1);
-    pwm_start(motorL, 100000, 500, 0, 1);
-    pwm_start(motorR, 100000, 500, rightVal, 1);
-    pwm_start(motorLrev, 100000, 500, revSpeed, 1);
+    pwm_start(motorRrev, 100000, 500, 0, 0);
+    pwm_start(motorL, 100000, 500, 0, 0);
+    pwm_start(motorR, 100000, 500, rightVal, 0);
+    pwm_start(motorLrev, 100000, 500, revSpeed, 0);
   } else if (rightVal == 0) {
-    pwm_start(motorR, 100000, 500, 0, 1);
-    pwm_start(motorLrev, 100000, 500, 0, 1);
-    pwm_start(motorRrev, 100000, 500, revSpeed, 1);
-    pwm_start(motorL, 100000, 500, leftVal, 1);
+    pwm_start(motorR, 100000, 500, 0, 0);
+    pwm_start(motorLrev, 100000, 500, 0, 0);
+    pwm_start(motorRrev, 100000, 500, revSpeed, 0);
+    pwm_start(motorL, 100000, 500, leftVal, 0);
   }
 }
 
@@ -457,49 +476,26 @@ void splitProcedure(void) {
   }
 
   // Stop if at desired split number
-  if (splits >= splitGoal) {
-    digitalWrite(LED, HIGH);
+  if (splits >= splitGoal)  {
+    delay(500);
     hardStop();
     delay(1000);
+    pivot(stayLeft);
+    returning = true; // Now on return path
+    getStone();
+
     return;
   }
   
   // Turn in direction of desired split path until the QRD's sense tape
   // Dont turn after 2nd split. These are pillar markers
   if (stayLeft && splits < 3) {
-    pwm_start(motorL, 100000, 500, 0, 1);
-    pwm_start(motorRrev, 100000, 500, 0, 1);
-    pwm_start(motorR, 100000, 500, 250, 1);
-    pwm_start(motorLrev, 100000, 500, 250, 1);
-    delay(250);
+    followSplit(true, true); // true, true means follow left path and have delay before looking for tape
+
   } else if (splits < 3) {
-    pwm_start(motorR, 100000, 500, 0, 1);
-    pwm_start(motorLrev, 100000, 500, 0, 1);
-    pwm_start(motorL, 100000, 500, 250, 1);
-    pwm_start(motorRrev, 100000, 500, 250, 1);
-    delay(250);
-  }
-  while (!(digitalRead(leftestQRD) || digitalRead(leftQRD) || digitalRead(rightQRD) || digitalRead(rightestQRD))) {
-    delay(10); // Keep turning until back on tape
-  }
+    followSplit(false, true); // false true means follow right path and have delay before looking for tape
 
-  // Continue forward once tape is found
-  pwm_stop(motorLrev);
-  pwm_stop(motorRrev);
-  pwm_start(motorL, 100000, 500, 100, 1);
-  pwm_start(motorR, 100000, 500, 100, 1);
-  error = 0;
-}
-
-// Procedure which is run in every non splitting state
-void noSplitProcedure(void) {
-  // If coming from a split state, reset PWM averages
-  if (splitting) {
-    PWMleft = (maxPWM + minPWM)/2;
-    PWMright = (maxPWM + minPWM)/2;
   }
-
-  splitting = false;
 }
 
 // Procedure run at splits when on return path
@@ -511,125 +507,143 @@ void returnSplitProcedure(void) {
     lastSplit = millis();
   }
 
-  if (splits == 1) {
+  if (splits == 2) {
     // Second to last split before the gauntlet, need to turn
     if (stayLeft) {
       // If we were staying left on the outward path, need to stay right on return path
-      pwm_start(motorR, 100000, 500, 0, 1);
-      pwm_start(motorLrev, 100000, 500, 0, 1);
-      pwm_start(motorL, 100000, 500, 250, 1);
-      pwm_start(motorRrev, 100000, 500, 250, 1);
+      followSplit(false, false); // false, false means stay right and dont have delay before looking for tape
     } else {
       // If we were staying right on outward path, need to stay left on return path
-      pwm_start(motorL, 100000, 500, 0, 1);
-      pwm_start(motorRrev, 100000, 500, 0, 1);
-      pwm_start(motorR, 100000, 500, 250, 1);
-      pwm_start(motorLrev, 100000, 500, 250, 1);
+      followSplit(true, false); // true, false means stay left with no delay before looking for tape
     }
-    waitForTape();
 
-    // Continue forward once tape is found
-    pwm_stop(motorLrev);
-    pwm_stop(motorRrev);
-    pwm_start(motorL, 100000, 500, 100, 1);
-    pwm_start(motorR, 100000, 500, 100, 1);
-    error = 0;
-
-
-  } else if (splits == 0) {
+  } else if (splits == 1) {
     // At the gauntlet
     gauntletProcedure();
+  } else {
+    getStone();
   }
 }
 
+// Procedure to run when at the gauntlet split
 void gauntletProcedure(void) {
   // Hard stop (near ledge)
+  delay(500);
   hardStop();
   delay(1000);
-  tuneKp = true;
 
   // If we stayed left initially,the gauntlet is on the left
   // Otherwise, its on the right
-  if (stayLeft) {
-    pwm_start(motorL, 100000, 500, 0, 1);
-    pwm_start(motorRrev, 100000, 500, 0, 1);
-    pwm_start(motorR, 100000, 500, 150, 1);
-    pwm_start(motorLrev, 100000, 500, 150, 1);
-    delay(250);
-  } else {
-    pwm_start(motorR, 100000, 500, 0, 1);
-    pwm_start(motorLrev, 100000, 500, 0, 1);
-    pwm_start(motorL, 100000, 500, 150, 1);
-    pwm_start(motorRrev, 100000, 500, 150, 1);
-    delay(250);
-  }
-  while (!(digitalRead(leftestQRD) || digitalRead(leftQRD) || digitalRead(rightQRD) || digitalRead(rightestQRD))) {
-    delay(10); // Keep turning until back on tape
-  }
+  pivot(!stayLeft); //if stayLeft is true will pivot CCW
 
-  // Continue forward once tape is found
-  pwm_stop(motorLrev);
-  pwm_stop(motorRrev);
-  pwm_start(motorL, 100000, 500, 100, 1);
-  pwm_start(motorR, 100000, 500, 100, 1);
-  
-  // Place holder code to stop at gauntlet. Will  be replaced by limit switch stop
+  // EY BABEEEEEEEE
+  bringItHomeBaby();
+}
+
+// FINISH HIM!!!!!
+void bringItHomeBaby(void) {
+  int start = millis();
+
+  // slider.write(0);
+
+  while (millis() - start < 2000) {
+    updateError();
+
+    correction = Kp*error + Kd*calcDerivative();
+
+    updatePWMvalue(300, 100);
+
+    updateMotors(PWMleft, PWMright);
+  }
+  for (int i = 180; i > 20; i--) {
+    depo.write(i);
+    delay(10);
+  }
   delay(1000);
-  pwm_start(motorL, 100000, 500, 0, 1);
-  pwm_start(motorR, 100000, 500, 0, 1);
-  pwm_start(motorLrev, 100000, 500, 0, 1);
-  pwm_start(motorRrev, 100000, 500, 0, 1);
   tuneKp = true;
 }
 
 // Stops bot
 void hardStop(void) {
-  // Pulse motors backwards according to how fast they are spinning forwards
-  delay(100);
-  pwm_start(motorL, 100000, 500, 0, 1);
-  pwm_start(motorR, 100000, 500, 0, 1);
-  pwm_start(motorLrev, 100000, 500, 500, 1);
-  pwm_start(motorRrev, 100000, 500, 500, 1);
-  delay(150);
-  pwm_start(motorLrev, 100000, 500, 0, 1);
-  pwm_start(motorRrev, 100000, 500, 0, 1);
-}
-
-// Function for aqcuiring a stone from a pillar
-// a is the Arm object which controls all motion of the robot arm and claw
-// Motion must include outward motion to pillar, upward motion to stone, claw closure,
-// deposition maneuvering, and claw openning, and return to default position
-void getStone(Arm a) {
-
+  // Pulse motors backwards to stop
+  pwm_start(motorL, 100000, 500, 0, 0);
+  pwm_start(motorR, 100000, 500, 0, 0);
+  pwm_start(motorLrev, 100000, 500, 500, 0);
+  pwm_start(motorRrev, 100000, 500, 500, 0);
+  delay(brakingTime);
+  pwm_start(motorLrev, 100000, 500, 0, 0);
+  pwm_start(motorRrev, 100000, 500, 0, 0);
 }
 
 // Turns the robot around on tape line
 void pivot(bool clockwise) {
   if (clockwise) {
-    digitalWrite(LED, HIGH);
-    pwm_start(motorL, 100000, 500, 250, 1);
-    pwm_start(motorRrev, 100000, 500, 250, 1);
+    pwm_start(motorL, 100000, 500, 350, 0);
+    pwm_start(motorRrev, 100000, 500, 350, 0);
     delay(400);
-    while (!(digitalRead(leftestQRD) || digitalRead(leftQRD) || digitalRead(rightQRD) || digitalRead(rightestQRD))) {
-      delay(10);
-    }
-    pwm_start(motorL, 100000, 500, 0, 1);
-    pwm_start(motorRrev, 100000, 500, 0, 1);
+    waitForTape();
+    pwm_start(motorL, 100000, 500, 0, 0);
+    pwm_start(motorRrev, 100000, 500, 0, 0);
   } else {
-    pwm_start(motorLrev, 100000, 500, 250, 1);
-    pwm_start(motorR, 100000, 500, 250, 1);
-    delay(200);
-    while (!(digitalRead(leftestQRD) || digitalRead(leftQRD) || digitalRead(rightQRD) || digitalRead(rightestQRD))) {
-      delay(10);
-    }
-    pwm_start(motorLrev, 100000, 500, 0, 1);
-    pwm_start(motorR, 100000, 500, 0, 1);
+    pwm_start(motorLrev, 100000, 500, 350, 0);
+    pwm_start(motorR, 100000, 500, 350, 0);
+    delay(400);
+    waitForTape();
+    pwm_start(motorLrev, 100000, 500, 0, 0);
+    pwm_start(motorR, 100000, 500, 0, 0);
   }
 }
 
+// Waits until a QRD reads tape
 void waitForTape(void) {
   while (!(digitalRead(leftestQRD) || digitalRead(leftQRD) || digitalRead(rightQRD) || digitalRead(rightestQRD))) {
     delay(10); // Wait until on tape
   }
 
+}
+
+// Continues moving forward after other procedures
+void keepGoing(void) {
+  pwm_start(motorLrev, 100000, 500, 0, 0);
+  pwm_start(motorRrev, 100000, 500, 0, 0);
+  pwm_start(motorL, 100000, 500, 100, 0);
+  pwm_start(motorR, 100000, 500, 100, 0);
+}
+
+// Follows a split path
+// If leftPath is true, follows left path, else right path
+// If have delay is true, waits after turning before looking for tape (not necessary for return)
+void followSplit(bool leftPath, bool haveDelay) {
+  if (leftPath) {
+      // If we were staying left on the outward path, need to stay right on return path
+      pwm_start(motorL, 100000, 500, 0, 0);
+      pwm_start(motorRrev, 100000, 500, 0, 0);
+      pwm_start(motorR, 100000, 500, 250, 0);
+      pwm_start(motorLrev, 100000, 500, 250, 0);
+  } else {
+      // If we were staying right on outward path, need to stay left on return path
+      pwm_start(motorLrev, 100000, 500, 0, 0);
+      pwm_start(motorR, 100000, 500, 0, 0);
+      pwm_start(motorL, 100000, 500, 250, 0);
+      pwm_start(motorRrev, 100000, 500, 250, 0);
+  }
+  if (haveDelay) {
+    delay(250);
+  }
+  waitForTape();
+
+  // Continue forward once tape is found
+  keepGoing();
+  error = 0;
+}
+
+void getStone(void) {
+  // Stop and tell arm to grab stone
+  hardStop();
+  digitalWrite(atStone, HIGH);
+  // Wait until stone grabbed
+  while(!digitalRead(stoned)) {
+    delay(10);
+  }
+  digitalWrite(atStone, LOW);
 }
